@@ -28,6 +28,14 @@ test('lz4: rejects corrupt input instead of reading out of bounds', () => {
   assert.throws(() => lz4DecodeBlock(lz4EncodeBlock(Buffer.alloc(100, 7)), 99), /overflow/);
 });
 
+const lz4Vectors = JSON.parse(readFileSync(new URL('./fixtures/lz4-vectors.json', import.meta.url), 'utf8'));
+for (const v of lz4Vectors) {
+  test(`lz4: decodes a block produced by the real liblz4 (${v.name})`, () => {
+    const out = lz4DecodeBlock(Buffer.from(v.b64, 'base64'), v.size);
+    assert.equal(createHash('sha256').update(out).digest('hex'), v.sha256);
+  });
+}
+
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/lzma-vectors.json', import.meta.url), 'utf8'));
 for (const v of vectors) {
   test(`lzma: decodes a real xz-produced stream (${v.name})`, () => {

@@ -59,10 +59,10 @@ test('DXT1: 4-colour mode interpolation', () => {
   assert.deepEqual(px(out, 4, 3, 0), [85, 0, 170, 255]);
 });
 
-test('DXT1: 3-colour mode with transparent index 3', () => {
+test('DXT1: 3-colour mode; index 3 is opaque black (Unity DXT1 is an RGB format)', () => {
   const out = decodeTexture(4, 4, 10, dxt1Block(0x001f, 0xf800, 0xe4));
-  assert.deepEqual(px(out, 4, 2, 3), [128, 0, 128, 255]);
-  assert.deepEqual(px(out, 4, 3, 3), [0, 0, 0, 0]);
+  assert.deepEqual(px(out, 4, 2, 3), [127, 0, 127, 255]); // (0+255)/2 truncated, like GPUs and reference decoders
+  assert.deepEqual(px(out, 4, 3, 3), [0, 0, 0, 255]);
 });
 
 test('DXT1: non-multiple-of-4 sizes are cropped, not misread', () => {
@@ -86,9 +86,9 @@ function dxt5Block(a0, a1, alphaIdx, color) {
 test('DXT5: 8-step alpha ramp and 6-step alpha with 0/255 endpoints', () => {
   const idx = Array.from({ length: 16 }, (_, i) => i % 8);
   const out = decodeTexture(4, 4, 12, dxt5Block(255, 0, idx, 0xffff));
-  // a0>a1 palette: [255, 0, 219, 182, 146, 109, 73, 36]; the top output row is stored row 3 = codes 4,5,6,7
-  assert.deepEqual([0, 1, 2, 3].map((x) => px(out, 4, x, 0)[3]), [146, 109, 73, 36]);
-  assert.deepEqual([0, 1, 2, 3].map((x) => px(out, 4, x, 3)[3]), [255, 0, 219, 182]); // bottom row = stored row 0 = codes 0..3
+  // a0>a1 palette (integer division): [255, 0, 218, 182, 145, 109, 72, 36]; the top output row is stored row 3 = codes 4,5,6,7
+  assert.deepEqual([0, 1, 2, 3].map((x) => px(out, 4, x, 0)[3]), [145, 109, 72, 36]);
+  assert.deepEqual([0, 1, 2, 3].map((x) => px(out, 4, x, 3)[3]), [255, 0, 218, 182]); // bottom row = stored row 0 = codes 0..3
   assert.deepEqual(px(out, 4, 0, 0).slice(0, 3), [255, 255, 255]);
   const out2 = decodeTexture(4, 4, 12, dxt5Block(0, 255, idx, 0xffff));
   // a0<=a1 palette: [0, 255, 51, 102, 153, 204, 0, 255]; codes 4,5,6,7 on the top row

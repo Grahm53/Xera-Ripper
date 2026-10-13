@@ -174,7 +174,10 @@ export function audioClipData({ name = 'clip', source = '', offset = 0, size = 0
 // ---- UnityFS bundle ---------------------------------------------------------------------------------------------
 // opts: { version=7, compression:'none'|'lz4', infoCompression:'none'|'lz4', infoAtEnd=false, pad=false, blockSize=64, files:[{path, data, serialized}] }
 export function buildUnityFs(opts) {
-  const { version = 7, compression = 'none', infoCompression = 'none', infoAtEnd = false, pad = false, blockSize = 64, files } = opts;
+  const {
+    version = 7, revision = '2021.3.10f1', compression = 'none', infoCompression = 'none', infoAtEnd = false, pad = false, blockSize = 64,
+    alignHeader = version >= 7, files,
+  } = opts;
   const comp = (name) => ({ none: 0, lzma: 1, lz4: 2 }[name]);
 
   const all = Buffer.concat(files.map((f) => f.data));
@@ -207,10 +210,10 @@ export function buildUnityFs(opts) {
 
   const dataBuf = Buffer.concat(dataParts);
   const head = new Writer(false);
-  head.cstring('UnityFS').u32(version).cstring('5.x.x').cstring('2019.4.31f1');
+  head.cstring('UnityFS').u32(version).cstring('5.x.x').cstring(revision);
   const sizeFieldPos = head.len;
   head.i64(0).u32(infoPacked.length).u32(infoRaw.length).u32(flags);
-  if (version >= 7) head.align(16);
+  if (alignHeader) head.align(16);
 
   let body;
   if (infoAtEnd) {

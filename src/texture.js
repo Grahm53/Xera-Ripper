@@ -20,14 +20,14 @@ const MAX_PIXELS = 16384 * 16384;
 const LINEAR = {
   1: { bpp: 1, px: (d, i, o, j) => { o[j] = 255; o[j + 1] = 255; o[j + 2] = 255; o[j + 3] = d[i]; } },                          // Alpha8
   63: { bpp: 1, px: (d, i, o, j) => { o[j] = d[i]; o[j + 1] = 0; o[j + 2] = 0; o[j + 3] = 255; } },                             // R8
-  9: { bpp: 2, px: (d, i, o, j) => { const v = d[i + 1]; o[j] = v; o[j + 1] = v; o[j + 2] = v; o[j + 3] = 255; } },             // R16 (high byte)
+  9: { bpp: 2, px: (d, i, o, j) => { o[j] = d[i + 1]; o[j + 1] = 0; o[j + 2] = 0; o[j + 3] = 255; } },                        // R16 (high byte, red channel like R8)
   3: { bpp: 3, px: (d, i, o, j) => { o[j] = d[i]; o[j + 1] = d[i + 1]; o[j + 2] = d[i + 2]; o[j + 3] = 255; } },               // RGB24
   4: { bpp: 4, px: (d, i, o, j) => { o[j] = d[i]; o[j + 1] = d[i + 1]; o[j + 2] = d[i + 2]; o[j + 3] = d[i + 3]; } },           // RGBA32
   5: { bpp: 4, px: (d, i, o, j) => { o[j] = d[i + 1]; o[j + 1] = d[i + 2]; o[j + 2] = d[i + 3]; o[j + 3] = d[i]; } },           // ARGB32
   14: { bpp: 4, px: (d, i, o, j) => { o[j] = d[i + 2]; o[j + 1] = d[i + 1]; o[j + 2] = d[i]; o[j + 3] = d[i + 3]; } },          // BGRA32
   7: { bpp: 2, px: (d, i, o, j) => {                                                                                              // RGB565
     const v = d[i] | (d[i + 1] << 8);
-    o[j] = ((v >> 11) & 31) * 255 / 31 + 0.5; o[j + 1] = ((v >> 5) & 63) * 255 / 63 + 0.5; o[j + 2] = (v & 31) * 255 / 31 + 0.5; o[j + 3] = 255;
+    rgb565(v, o, j); o[j + 3] = 255;
   } },
   13: { bpp: 2, px: (d, i, o, j) => {                                                                                             // RGBA4444
     const v = d[i] | (d[i + 1] << 8);
@@ -39,10 +39,12 @@ const LINEAR = {
   } },
 };
 
+// 5/6/5 -> 8/8/8 by bit replication, exactly as GPUs and the common reference decoders do.
 function rgb565(v, out, k) {
-  out[k] = ((v >> 11) & 31) * 255 / 31 + 0.5;
-  out[k + 1] = ((v >> 5) & 63) * 255 / 63 + 0.5;
-  out[k + 2] = (v & 31) * 255 / 31 + 0.5;
+  const r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
+  out[k] = (r << 3) | (r >> 2);
+  out[k + 1] = (g << 2) | (g >> 4);
+  out[k + 2] = (b << 3) | (b >> 2);
 }
 
 // One BC1 colour block -> 4 palette entries (RGBA). `forceFour` is true for DXT3/5 colour halves, which never use 1-bit alpha.
@@ -54,13 +56,14 @@ function bc1Palette(d, off, forceFour) {
   p[3] = 255; p[7] = 255;
   if (c0 > c1 || forceFour) {
     for (let k = 0; k < 3; k++) {
-      p[8 + k] = (2 * p[k] + p[4 + k]) / 3 + 0.5;
-      p[12 + k] = (p[k] + 2 * p[4 + k]) / 3 + 0.5;
+      p[8 + k] = ((2 * p[k] + p[4 + k]) / 3) | 0;
+      p[12 + k] = ((p[k] + 2 * p[4 + k]) / 3) | 0;
     }
     p[11] = 255; p[15] = 255;
   } else {
-    for (let k = 0; k < 3; k++) { p[8 + k] = (p[k] + p[4 + k]) / 2 + 0.5; p[12 + k] = 0; }
-    p[11] = 255; p[15] = 0;
+    // Unity's DXT1 is an RGB format: the 1-bit-alpha "transparent" index is decoded as opaque black (as other decoders do).
+    for (let k = 0; k < 3; k++) { p[8 + k] = ((p[k] + p[4 + k]) / 2) | 0; p[12 + k] = 0; }
+    p[11] = 255; p[15] = 255;
   }
   return p;
 }
@@ -99,8 +102,8 @@ function dxt1Block(d, off) {
 function dxt5Block(d, off) {
   const a0 = d[off], a1 = d[off + 1];
   const alpha = [a0, a1];
-  if (a0 > a1) for (let k = 1; k <= 6; k++) alpha.push(((7 - k) * a0 + k * a1) / 7 + 0.5 | 0);
-  else { for (let k = 1; k <= 4; k++) alpha.push(((5 - k) * a0 + k * a1) / 5 + 0.5 | 0); alpha.push(0, 255); }
+  if (a0 > a1) for (let k = 1; k <= 6; k++) alpha.push(((7 - k) * a0 + k * a1) / 7 | 0);
+  else { for (let k = 1; k <= 4; k++) alpha.push(((5 - k) * a0 + k * a1) / 5 | 0); alpha.push(0, 255); }
   // 48 bits of 3-bit indices, little-endian
   const lo = d.readUInt32LE(off + 2);
   const hi = d.readUInt16LE(off + 6);

@@ -1,5 +1,6 @@
 // Tiny greedy LZ4 block *encoder*, test-only. Good enough to exercise literal runs, long lengths (>=15, >=255)
-// and overlapping matches in the decoder.
+// and overlapping matches in the decoder. It obeys the LZ4 end-of-block rules (last match starts >= 12 bytes before
+// the end and stops >= 5 bytes before it), because strict decoders such as liblz4 reject streams that break them.
 export function lz4EncodeBlock(input) {
   const out = [];
   const table = new Map();
@@ -17,13 +18,15 @@ export function lz4EncodeBlock(input) {
       if (ml >= 15) writeLen(ml - 15);
     }
   };
-  while (i + 4 <= input.length) {
+  const matchStartLimit = input.length - 12;
+  const matchEndLimit = input.length - 5;
+  while (i <= matchStartLimit) {
     const key = input.readUInt32LE(i);
     const cand = table.get(key);
     table.set(key, i);
     if (cand !== undefined && i - cand <= 0xffff) {
       let len = 4;
-      while (i + len < input.length && input[cand + len] === input[i + len]) len++;
+      while (i + len < matchEndLimit && input[cand + len] === input[i + len]) len++;
       emit(anchor, i, len, i - cand);
       i += len;
       anchor = i;

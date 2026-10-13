@@ -125,8 +125,10 @@ const bundleCases = [
   { name: 'lz4 blocks, stored info', opts: { compression: 'lz4' } },
   { name: 'lz4 blocks + lz4 info', opts: { compression: 'lz4', infoCompression: 'lz4' } },
   { name: 'info at end (flag 0x80)', opts: { compression: 'lz4', infoAtEnd: true } },
-  { name: 'padding flag (0x200)', opts: { compression: 'lz4', pad: true } },
-  { name: 'format version 6 (no header alignment)', opts: { version: 6, compression: 'lz4' } },
+  { name: 'padding flag (0x200) on a modern revision', opts: { revision: '2021.3.10f1', compression: 'lz4', pad: true } },
+  { name: 'format 6 from Unity 2019.4.15+ is still 16-byte aligned', opts: { version: 6, revision: '2019.4.31f1', alignHeader: true, compression: 'lz4' } },
+  { name: 'format 6 from old Unity has no header alignment', opts: { version: 6, revision: '2018.4.20f1', alignHeader: false, compression: 'lz4' } },
+  { name: 'format 6 from Unity 2019.4.14 (just before the alignment change)', opts: { version: 6, revision: '2019.4.14f1', alignHeader: false, compression: 'lz4' } },
 ];
 for (const c of bundleCases) {
   test(`unityfs: ${c.name}`, () => {
@@ -134,13 +136,32 @@ for (const c of bundleCases) {
     const buf = buildUnityFs({ ...c.opts, files });
     assert.ok(isUnityFs(buf));
     const b = parseUnityFs(buf);
-    assert.equal(b.unityRevision, '2019.4.31f1');
+    assert.equal(b.unityRevision, c.opts.revision ?? '2021.3.10f1');
     assert.deepEqual(b.files.map((f) => f.path), ['CAB-1', 'CAB-1.resS']);
     assert.deepEqual(b.files[0].data, files[0].data);
     assert.deepEqual(b.files[1].data, files[1].data);
     assert.equal(new SerializedFile(b.files[0].data).objects.length, 3);
   });
 }
+
+test('unityfs: flag 0x200 means ENCRYPTED on old Unity, PADDING on new Unity (the meaning changed in 2020.3.34/2021.3.2/2022.1.1)', () => {
+  for (const revision of ['2019.4.31f1', '2020.3.33f1', '2021.3.1f1', '2022.1.0f1', '5.6.7f1']) {
+    const buf = buildUnityFs({ revision, compression: 'lz4', pad: true, files: bundleFiles() });
+    assert.throws(() => parseUnityFs(buf), /encrypted/, revision);
+  }
+  for (const revision of ['2020.3.34f1', '2021.3.2f1', '2022.1.1f1', '2022.3.5f1', '6000.0.1f1']) {
+    const buf = buildUnityFs({ revision, compression: 'lz4', pad: true, files: bundleFiles() });
+    assert.equal(parseUnityFs(buf).files.length, 2, revision);
+  }
+});
+
+test('unityfs: revision parsing', async () => {
+  const { parseUnityRevision } = await import('../src/unityFs.js');
+  assert.deepEqual(parseUnityRevision('2019.4.31f1'), [2019, 4, 31]);
+  assert.deepEqual(parseUnityRevision('6000.0.23f1'), [6000, 0, 23]);
+  assert.equal(parseUnityRevision('garbage'), null);
+  assert.equal(parseUnityRevision(undefined), null);
+});
 
 test('unityfs: truncated and corrupt bundles throw', () => {
   const buf = buildUnityFs({ compression: 'lz4', files: bundleFiles() });
