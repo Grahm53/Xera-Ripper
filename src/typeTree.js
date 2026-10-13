@@ -57,9 +57,14 @@ export class TypeTree {
 
   // Decode one object's bytes into plain JS values using this tree as the schema.
   //   rawStrings: keep `string` fields as Buffers (TextAsset scripts are frequently binary)
-  read(buffer, { little = true, rawStrings = false } = {}) {
+  read(buffer, opts) { return this.readCounted(buffer, opts).value; }
+
+  // Like read(), but also reports how many bytes the tree consumed (used to validate database-supplied trees).
+  readCounted(buffer, { little = true, rawStrings = false } = {}) {
     if (!this.nodes.length) throw new Error('empty type tree');
-    return this._value(new BinaryReader(buffer, 0, little), 0, rawStrings);
+    const r = new BinaryReader(buffer, 0, little);
+    const value = this._value(r, 0, rawStrings);
+    return { value, consumed: r.pos };
   }
 
   // Cheap name lookup for listings: only decodes the first field, and only if it is m_Name.
@@ -149,6 +154,7 @@ export class TypeTree {
 
 // JSON-safe view of a decoded object (Buffers become {$bytes:n}); used by the dump command and the web UI.
 export function toJsonSafe(value) {
+  if (typeof value === 'bigint') return value.toString();
   if (Buffer.isBuffer(value)) return { $bytes: value.length };
   if (Array.isArray(value)) return value.map(toJsonSafe);
   if (value && typeof value === 'object') {
@@ -158,3 +164,6 @@ export function toJsonSafe(value) {
   }
   return value;
 }
+
+// JSON.stringify replacer for payloads that may carry BigInt path IDs.
+export const bigintReplacer = (_k, v) => (typeof v === 'bigint' ? v.toString() : v);

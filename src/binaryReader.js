@@ -26,18 +26,19 @@ export class BinaryReader {
   f32() { this._need(4); const v = this.little ? this.buf.readFloatLE(this.pos) : this.buf.readFloatBE(this.pos); this.pos += 4; return v; }
   f64() { this._need(8); const v = this.little ? this.buf.readDoubleLE(this.pos) : this.buf.readDoubleBE(this.pos); this.pos += 8; return v; }
 
-  // 64-bit ints come back as Numbers; anything beyond 2^53 is refused rather than silently rounded.
+  // 64-bit values come back as a Number when that is exact, and as a BigInt when it is not. Unity's hashed path IDs
+  // (e.g. -6291524532174903347) routinely exceed 2^53, and rounding one would silently point at the wrong object.
   i64() {
     this._need(8);
     const v = this.little ? this.buf.readBigInt64LE(this.pos) : this.buf.readBigInt64BE(this.pos);
     this.pos += 8;
-    return safeNumber(v);
+    return exactNumber(v);
   }
   u64() {
     this._need(8);
     const v = this.little ? this.buf.readBigUInt64LE(this.pos) : this.buf.readBigUInt64BE(this.pos);
     this.pos += 8;
-    return safeNumber(v);
+    return exactNumber(v);
   }
 
   // Zero-copy view; callers that keep it past the lifetime of the source buffer must copy.
@@ -67,9 +68,12 @@ export class BinaryReader {
   }
 }
 
-function safeNumber(big) {
-  if (big > BigInt(Number.MAX_SAFE_INTEGER) || big < BigInt(Number.MIN_SAFE_INTEGER)) {
-    throw new RangeError(`64-bit value ${big} does not fit in a safe integer`);
-  }
-  return Number(big);
+function exactNumber(big) {
+  return big <= BigInt(Number.MAX_SAFE_INTEGER) && big >= BigInt(Number.MIN_SAFE_INTEGER) ? Number(big) : big;
+}
+
+// Sizes and offsets must be plain Numbers; a 64-bit value this large there means the file is corrupt.
+export function sizeNumber(v, what = 'value') {
+  if (typeof v !== 'number') throw new RangeError(`${what} ${v} is implausibly large`);
+  return v;
 }

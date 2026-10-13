@@ -1,10 +1,19 @@
-import { BinaryReader } from './binaryReader.js';
+import { BinaryReader, sizeNumber } from './binaryReader.js';
 import { className } from './classIds.js';
 import { parseTypeTreeBlob, TypeTree, UnsupportedError } from './typeTree.js';
+import { defaultTypeDatabase } from './tpk.js';
 
 export class NoTypeTreeError extends UnsupportedError {
   constructor(message) { super(message); this.name = 'NoTypeTreeError'; }
 }
+
+// The built-in database knew the class but its layout does not match the object's bytes (e.g. a patched engine).
+export class TypeTreeMismatchError extends NoTypeTreeError {
+  constructor(message) { super(message); this.name = 'TypeTreeMismatchError'; }
+}
+
+// Classes whose real layout depends on a user script (not in the engine database): only their base fields decode.
+const SCRIPT_DRIVEN = new Set([114]);
 
 const MIN_VERSION = 9;
 const MAX_VERSION = 40;
@@ -23,6 +32,7 @@ export function looksLikeSerializedFile(buf, totalLength = buf.length) {
   if (version >= 22) {
     r.pos = 20;
     try { r.u32(); fileSize = r.i64(); dataOffset = r.i64(); } catch { return false; }
+    if (typeof fileSize !== 'number' || typeof dataOffset !== 'number') return false;
   }
   return fileSize > 0 && fileSize <= totalLength && dataOffset <= fileSize && metadataSize <= fileSize && dataOffset >= 16;
 }
@@ -78,7 +88,7 @@ export class SerializedFile {
     if (version >= 22) {
       r.u32();
       r.i64(); // file size
-      dataOffset = r.i64();
+      dataOffset = sizeNumber(r.i64(), 'data offset');
       r.i64(); // unknown
     }
     r.little = endian === 0;
@@ -107,7 +117,7 @@ export class SerializedFile {
       else if (version < 14) pathId = r.i32();
       else { r.align(4); pathId = r.i64(); }
 
-      const byteStart = (version >= 22 ? r.i64() : r.u32()) + dataOffset;
+      const byteStart = sizeNumber(version >= 22 ? r.i64() : r.u32(), 'object offset') + dataOffset;
       const byteSize = r.u32();
       const typeId = r.i32();
       let classId;
@@ -162,17 +172,53 @@ export class SerializedFile {
     return this.buffer.subarray(obj.byteStart, end);
   }
 
+  // { tree, source } where source is 'file' (embedded) or 'database' (built-in per-Unity-version layouts); null if neither.
+  treeFor(obj) {
+    const embedded = this.typeOf(obj)?.tree;
+    if (embedded) return { tree: embedded, source: 'file' };
+    const tree = defaultTypeDatabase()?.treeFor(obj.classId, this.unityVersion);
+    return tree ? { tree, source: 'database' } : null;
+  }
+
+  // How this file's objects get their field layouts: from the file, from the built-in database, or not at all.
+  get treeSource() {
+    if (this.hasTypeTree) return 'file';
+    const db = defaultTypeDatabase();
+    return db && db.treeFor(28, this.unityVersion) ? 'database' : 'none';
+  }
+
   readObject(obj, opts = {}) {
-    const type = this.typeOf(obj);
-    if (!type?.tree) {
-      throw new NoTypeTreeError(
-        `${obj.className} has no type tree in this file (release builds strip them); a built-in type-tree database is not implemented yet`);
+    const found = this.treeFor(obj);
+    if (!found) {
+      throw new NoTypeTreeError(this.hasTypeTree
+        ? `no type tree for ${obj.className} in this file`
+        : `${obj.className} has no type tree in this file (release builds strip them) and the built-in database has no layout for Unity ${this.unityVersion || '?'}`);
     }
-    return type.tree.read(this.objectBytes(obj), { little: this.little, ...opts });
+    const bytes = this.objectBytes(obj);
+    let decoded;
+    try {
+      decoded = found.tree.readCounted(bytes, { little: this.little, ...opts });
+    } catch (e) {
+      // A wrong database layout typically runs off the end of the object or reads an absurd length.
+      if (found.source === 'database' && e instanceof RangeError) {
+        throw new TypeTreeMismatchError(`built-in layout of ${obj.className} for Unity ${this.unityVersion} does not fit this object (${e.message})`);
+      }
+      throw e;
+    }
+    const { value, consumed } = decoded;
+    if (found.source === 'database') {
+      const left = bytes.length - consumed;
+      if (SCRIPT_DRIVEN.has(obj.classId)) {
+        if (left > 0) value.$unparsed = Buffer.from(bytes.subarray(consumed)); // script fields we cannot name
+      } else if (left < 0 || left > 3) { // up to 3 bytes of end padding is normal
+        throw new TypeTreeMismatchError(`built-in layout of ${obj.className} for Unity ${this.unityVersion} consumed ${consumed} of ${bytes.length} bytes; the object does not match it`);
+      }
+    }
+    return value;
   }
 
   peekName(obj) {
-    const tree = this.typeOf(obj)?.tree;
+    const tree = this.treeFor(obj)?.tree;
     if (!tree) return null;
     try { return tree.peekName(this.objectBytes(obj), this.little); } catch { return null; }
   }

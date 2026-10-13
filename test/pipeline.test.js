@@ -49,9 +49,11 @@ test('session: previews decode textures, text and audio; JSON for the rest', () 
   assert.equal(s.preview(id('Boom')).mime, 'audio/ogg');
   assert.match(s.preview(id('../../evil')).data.toString(), /owned\? no/);
   assert.throws(() => s.preview(id('AstcTex')), /ASTC_6x6/);
-  const hidden = s.assets.find((a) => a.pathId === 20); // stripped file => no type tree => no name either
-  assert.equal(hidden.name, '');
-  assert.throws(() => s.preview(hidden.id), /no type tree/);
+  // stripped file: the name is recovered from the built-in database, but the fixture's invented Texture2D layout does not
+  // match the real one, so decoding is refused rather than producing garbage
+  const hidden = s.assets.find((a) => a.pathId === 20);
+  assert.equal(hidden.name, 'Hidden');
+  assert.throws(() => s.preview(hidden.id), /built-in layout of Texture2D/);
   const detail = s.detail(id('Hero'));
   assert.equal(detail.data.m_Width, 2);
   assert.deepEqual(detail.data['image data'], { $bytes: 16 });
@@ -84,7 +86,7 @@ test('session: export writes PNG/txt/ogg/raw, reports failures, and never escape
   assert.equal(r.raw, 1);
   assert.equal(r.noTypeTree, 1);         // Hidden texture in the stripped file
   assert.equal(r.failed, 0);
-  assert.ok(r.items.find((i) => i.status === 'no-type-tree').note.includes('type tree'));
+  assert.match(r.items.find((i) => i.status === 'no-type-tree').note, /built-in layout/);
   assert.ok(rels.some((f) => f.includes('_json')) === false, 'only non-exportable classes get JSON, none exist in the fixture');
 });
 

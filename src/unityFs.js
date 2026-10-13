@@ -1,4 +1,4 @@
-import { BinaryReader } from './binaryReader.js';
+import { BinaryReader, sizeNumber } from './binaryReader.js';
 import { lz4DecodeBlock } from './lz4.js';
 import { lzmaDecode } from './lzma.js';
 import { UnsupportedError } from './typeTree.js';
@@ -55,7 +55,7 @@ export function parseUnityFs(buf) {
   const version = r.u32();
   const unityVersion = r.cstring();
   const unityRevision = r.cstring();
-  const declaredSize = r.i64();
+  const declaredSize = sizeNumber(r.i64(), 'bundle size');
   const compressedInfoSize = r.u32();
   const uncompressedInfoSize = r.u32();
   const flags = r.u32();
@@ -99,7 +99,7 @@ export function parseUnityFs(buf) {
   if (nodeCount < 0 || nodeCount > 1_000_000) throw new RangeError(`implausible directory size ${nodeCount}`);
   const nodes = [];
   for (let i = 0; i < nodeCount; i++) {
-    nodes.push({ offset: ir.i64(), size: ir.i64(), flags: ir.u32(), path: ir.cstring(1024) });
+    nodes.push({ offset: sizeNumber(ir.i64(), 'entry offset'), size: sizeNumber(ir.i64(), 'entry size'), flags: ir.u32(), path: ir.cstring(1024) });
   }
 
   let dataPos = flags & FLAG_INFO_AT_END ? r.pos : infoStart + compressedInfoSize;

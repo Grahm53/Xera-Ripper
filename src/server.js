@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Session } from './session.js';
 import { EXPORTABLE } from './exporters.js';
+import { bigintReplacer } from './typeTree.js';
 
 const UI_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'ui');
 const MAX_BODY = 1024 * 1024;
@@ -93,7 +94,7 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
     });
     res.end(body);
   };
-  const json = (res, status, obj) => send(res, status, JSON.stringify(obj), 'application/json; charset=utf-8', { 'Cache-Control': 'no-store' });
+  const json = (res, status, obj) => send(res, status, JSON.stringify(obj, bigintReplacer), 'application/json; charset=utf-8', { 'Cache-Control': 'no-store' });
 
   async function api(req, res, url) {
     if (!req.headers['x-xera-token'] || !safeEqual(req.headers['x-xera-token'], token)) throw new HttpError(401, 'missing or invalid token');

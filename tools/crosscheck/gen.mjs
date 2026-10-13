@@ -4,6 +4,8 @@ import {
   Writer, GENERIC_TREE, buildSerializedFile, buildUnityFs, texture2DData, textAssetData, audioClipData,
   TEXTURE2D_TREE, TEXTASSET_TREE, AUDIOCLIP_TREE,
 } from '../../test/helpers/builders.js';
+import { defaultTypeDatabase } from '../../src/tpk.js';
+import { randomValue, serializeObject, rng } from '../../test/helpers/treeWriter.js';
 
 const out = process.argv[2];
 if (!out) { console.error('usage: node gen.mjs <outdir>'); process.exit(1); }
@@ -30,6 +32,20 @@ for (const [name, opts] of Object.entries(bundles)) {
   writeFileSync(`${out}/${name}.bundle`, buildUnityFs({ ...opts, blockSize: 40, files: [{ path: 'CAB-1', data: sf, serialized: true }, { path: 'CAB-1.resS', data: Buffer.from('OggS') }] }));
 }
 
+// real AssetBundles use hashed 64-bit path IDs
+const HASHED = [-6291524532174903347n, 9223372036854775807n, -9223372036854775808n, 5821097400184312345n];
+for (const version of [17, 19, 22]) {
+  writeFileSync(`${out}/bigid_v${version}.assets`, buildSerializedFile({
+    version, types: TYPES,
+    objects: [
+      { pathId: HASHED[0], typeIndex: 1, data: textAssetData('a', 'first') },
+      { pathId: HASHED[1], typeIndex: 1, data: textAssetData('b', 'second') },
+      { pathId: HASHED[2], typeIndex: 1, data: textAssetData('c', 'third') },
+      { pathId: HASHED[3], typeIndex: 0, data: texture2DData({ name: 'T', width: 2, height: 2, format: 4, image: img }) },
+    ],
+  }));
+}
+
 function generic(little) {
   const w = new Writer(little);
   w.i32(3).i32(10).i32(-20).i32(30);
@@ -48,4 +64,23 @@ for (const little of [true, false]) {
       objects: [{ pathId: 5, typeIndex: 0, data: generic(little) }, { pathId: -9, typeIndex: 1, data: textAssetData('t', 'héllo wörld ✓', little) }],
     }));
   }
+}
+
+// Stripped files (no embedded type trees) with REAL engine layouts, one randomised object per class, for several Unity
+// versions. The independent reader decodes these with its own copy of the type-tree database.
+const db = defaultTypeDatabase();
+const CLASSES = [28, 49, 83, 43, 21, 74, 1, 4, 224, 142, 213, 48, 128, 23, 137, 95, 82, 20, 108, 198, 114, 223];
+const SERIALIZED_VERSION = { 2017: 17, 2018: 17, 2019: 19, 2020: 21, 2021: 22, 2022: 22, 6000: 22 };
+for (const unityVersion of ['2017.4.40f1', '2018.4.36f1', '2019.4.31f1', '2020.3.48f1', '2021.3.10f1', '2022.3.20f1', '6000.0.23f1']) {
+  const objs = [];
+  const types = [];
+  for (const id of CLASSES) {
+    const tree = db.treeFor(id, unityVersion);
+    if (!tree) continue;
+    types.push({ classId: id, tree: null });
+    objs.push({ pathId: 100 + id, typeIndex: types.length - 1, data: serializeObject(tree, randomValue(tree, rng(id * 7 + 1))) });
+  }
+  writeFileSync(`${out}/db_${unityVersion}.assets`, buildSerializedFile({
+    version: SERIALIZED_VERSION[Number(unityVersion.split('.')[0])], unityVersion, enableTypeTree: false, types, objects: objs,
+  }));
 }

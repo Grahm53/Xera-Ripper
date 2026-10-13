@@ -113,7 +113,7 @@ export class Session {
       input: this.inputPath,
       files: this.files.map((f) => ({
         index: f.index, name: f.name, container: f.container, unityVersion: f.sf.unityVersion, serializedVersion: f.sf.version,
-        platform: PLATFORMS[f.sf.targetPlatform] ?? `platform ${f.sf.targetPlatform}`, hasTypeTree: f.sf.hasTypeTree,
+        platform: PLATFORMS[f.sf.targetPlatform] ?? `platform ${f.sf.targetPlatform}`, hasTypeTree: f.sf.hasTypeTree, treeSource: f.sf.treeSource,
         objects: f.sf.objects.length,
       })),
       assetCount: this.assets.length,
@@ -161,7 +161,7 @@ export class Session {
   detail(id) {
     const a = this.asset(id);
     const file = this.files[a.fileIndex];
-    const out = { ...this._row(a), fileName: file.name, hasTypeTree: file.sf.typeOf(a.obj)?.tree != null, data: null, error: null };
+    const out = { ...this._row(a), fileName: file.name, hasTypeTree: file.sf.treeFor(a.obj) != null, data: null, error: null };
     try { out.data = toJsonSafe(file.sf.readObject(a.obj)); } catch (e) { out.error = e.message; }
     return out;
   }

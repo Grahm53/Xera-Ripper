@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { COMMON_BY_OFFSET } from '../src/commonStrings.js';
 import { TypeTree, parseTypeTreeBlob, toJsonSafe } from '../src/typeTree.js';
-import { SerializedFile, looksLikeSerializedFile, NoTypeTreeError } from '../src/serializedFile.js';
+import { SerializedFile, looksLikeSerializedFile, NoTypeTreeError, TypeTreeMismatchError } from '../src/serializedFile.js';
 import { BinaryReader } from '../src/binaryReader.js';
 import { parseUnityFs, isUnityFs } from '../src/unityFs.js';
 import {
@@ -92,13 +92,22 @@ test('serialized file: decodes typed objects through the type tree', () => {
   assert.equal(clip.m_CompressionFormat, 1);
 });
 
-test('serialized file: stripped type trees give a clear NoTypeTreeError but still list objects', () => {
-  const buf = buildSerializedFile({ version: 19, enableTypeTree: false, types: TYPES, objects: sampleObjects() });
-  const sf = new SerializedFile(buf);
-  assert.equal(sf.hasTypeTree, false);
-  assert.equal(sf.objects.length, 3);
-  assert.equal(sf.peekName(sf.objects[0]), null);
-  assert.throws(() => sf.readObject(sf.objects[0]), NoTypeTreeError);
+test('stripped type trees: names come from the built-in database, wrong layouts are refused, unknown Unity versions are explained', () => {
+  // Unity 2019.4 is in the database: the first field of Texture2D is m_Name, so the name is recovered...
+  const known = new SerializedFile(buildSerializedFile({ version: 19, enableTypeTree: false, types: TYPES, objects: sampleObjects() }));
+  assert.equal(known.hasTypeTree, false);
+  assert.equal(known.treeSource, 'database');
+  assert.equal(known.objects.length, 3);
+  assert.equal(known.peekName(known.objects[0]), 'Hero');
+  // ...but this fixture's invented Texture2D layout is not the real one, so decoding is refused, not guessed
+  assert.throws(() => known.readObject(known.objects[0]), TypeTreeMismatchError);
+  assert.throws(() => known.readObject(known.objects[0]), NoTypeTreeError, 'mismatch is a kind of "no usable type tree"');
+
+  // A Unity version older than anything in the database has no layouts at all
+  const unknown = new SerializedFile(buildSerializedFile({ version: 19, unityVersion: '1.0.0', enableTypeTree: false, types: TYPES, objects: sampleObjects() }));
+  assert.equal(unknown.treeSource, 'none');
+  assert.equal(unknown.peekName(unknown.objects[0]), null);
+  assert.throws(() => unknown.readObject(unknown.objects[0]), /no layout for Unity 1\.0\.0/);
 });
 
 test('serialized file: garbage and truncation are rejected, not mis-parsed', () => {
@@ -182,4 +191,31 @@ test('type tree reader refuses arrays of zero-width elements (cheap DoS guard)',
   const body = Buffer.concat([new Writer(true).i32(1_000_000).toBuffer(), Buffer.alloc(2_000_000)]);
   assert.throws(() => tree.read(body), /zero-width/);
   assert.deepEqual(tree.read(Buffer.concat([new Writer(true).i32(1).toBuffer(), Buffer.alloc(4)])), { m_Items: [{}] }, 'a single empty element is still legal');
+});
+
+test('64-bit hashed path IDs (as in real AssetBundles) are exact, not rounded or rejected', () => {
+  const ids = [-6291524532174903347n, 9223372036854775807n, -9223372036854775808n, 9007199254740993n, 42n, -7n];
+  const objects = ids.map((id, i) => ({ pathId: id, typeIndex: 1, data: textAssetData(`obj${i}`, `body ${i}`) }));
+  for (const version of [17, 19, 22]) {
+    const sf = new SerializedFile(buildSerializedFile({ version, types: TYPES, objects }));
+    assert.deepEqual(sf.objects.map((o) => String(o.pathId)), ids.map(String));
+    // ids that fit in 2^53 stay plain Numbers (cheap, JSON-friendly); the rest are BigInts, never silently rounded
+    assert.equal(typeof sf.objects[4].pathId, 'number');
+    assert.equal(typeof sf.objects[0].pathId, 'bigint');
+    assert.equal(sf.peekName(sf.objects[0]), 'obj0');
+    assert.equal(sf.readObject(sf.objects[1], { rawStrings: true }).m_Script.toString(), 'body 1');
+  }
+});
+
+test('64-bit fields inside objects keep full precision and serialise to JSON as strings', () => {
+  const tree = [
+    { level: 0, type: 'Big', name: 'Base', metaFlags: 0 }, { level: 1, type: 'SInt64', name: 'm_Id', metaFlags: 0 },
+    { level: 1, type: 'UInt64', name: 'm_Hash', metaFlags: 0 }, { level: 1, type: 'SInt64', name: 'm_Small', metaFlags: 0 },
+  ];
+  const t = new TypeTree(parseTypeTreeBlob(new BinaryReader(typeTreeBlob(tree, 19), 0, true), 19));
+  const v = t.read(new Writer(true).i64(-6291524532174903347n).u64(18446744073709551615n).i64(5).toBuffer());
+  assert.equal(v.m_Id, -6291524532174903347n);
+  assert.equal(v.m_Hash, 18446744073709551615n);
+  assert.equal(v.m_Small, 5);
+  assert.deepEqual(toJsonSafe(v), { m_Id: '-6291524532174903347', m_Hash: '18446744073709551615', m_Small: 5 });
 });

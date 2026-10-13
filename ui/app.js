@@ -361,7 +361,7 @@ async function select(id) {
     state.selectedExportable = d.exportable;
     renderMenu();
     const preview = h('div', { class: 'preview' }, 'Decoding preview…');
-    const data = h('details', {}, h('summary', {}, d.hasTypeTree ? 'Type tree data (JSON)' : 'No type tree in this file'));
+    const data = h('details', {}, h('summary', {}, d.hasTypeTree ? 'Decoded fields (JSON)' : 'Fields could not be decoded'));
     if (d.data) {
       const text = JSON.stringify(d.data, null, 2);
       data.append(h('pre', {}, text.length > 200000 ? `${text.slice(0, 200000)}\n… (truncated)` : text));
@@ -412,6 +412,13 @@ async function loadPreview(id, box, token) {
   }
 }
 
+const TREE_LABEL = { file: 'embedded', database: 'built-in', none: 'none' };
+const TREE_HELP = {
+  file: 'Field layouts are stored in the file itself.',
+  database: 'The file has no type trees (release build); layouts come from the built-in per-Unity-version database.',
+  none: 'No type trees in the file and the built-in database has no layouts for this Unity version, so objects cannot be decoded.',
+};
+
 function renderFiles(view) {
   const s = state.summary;
   view.append(h('section', { class: 'files' },
@@ -423,7 +430,7 @@ function renderFiles(view) {
         onkeydown: (e) => { if (e.key === 'Enter') e.currentTarget.click(); } },
         h('td', { title: f.name }, f.name), h('td', {}, f.container), h('td', {}, f.unityVersion || '?'), h('td', {}, f.platform),
         h('td', {}, String(f.serializedVersion)), h('td', {}, fmtNum(f.objects)),
-        h('td', { class: f.hasTypeTree ? 'okc' : 'warn' }, f.hasTypeTree ? 'yes' : 'stripped'))))))));
+        h('td', { class: f.treeSource === 'none' ? 'warn' : 'okc', title: TREE_HELP[f.treeSource] }, TREE_LABEL[f.treeSource] ?? f.treeSource))))))));
 }
 
 // ---------------------------------------------------------------- export dialog
