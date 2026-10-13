@@ -1,0 +1,5 @@
+node_modules/
+# default export folder
+xera-ripper-out/
+*.log
+.env
