@@ -10,7 +10,7 @@ const LANGS = {
     'menu.file': 'File', 'menu.view': 'View', 'menu.export': 'Export', 'menu.language': 'Language', 'menu.dev': 'Development',
     'file.openFile': 'Open File…', 'file.openFolder': 'Open Folder…', 'file.reset': 'Reset',
     'view.assets': 'Assets', 'view.files': 'Loaded files',
-    'export.all': 'Export all…', 'export.filter': 'Export current filter…', 'export.selected': 'Export selected asset…',
+    'export.project': 'Export Unity project…', 'export.all': 'Export all…', 'export.filter': 'Export current filter…', 'export.selected': 'Export selected asset…',
     'dev.log': 'Server log', 'dev.skipped': 'Skipped files',
     'welcome.title': 'Xera Ripper', 'welcome.sub': 'Unity asset extractor for bundles, serialized files and APKs.',
     'welcome.tag': 'Rip textures, text and audio from games you own.', 'welcome.none': 'No Files Loaded',
@@ -108,6 +108,8 @@ function menuDefs() {
       { label: t('view.files'), disabled: !loaded, check: state.view === 'files', run: () => setView('files') },
     ] },
     { id: 'export', label: t('menu.export'), items: [
+      { label: t('export.project'), disabled: !loaded, run: openProjectExport },
+      { sep: true },
       { label: t('export.all'), disabled: !loaded, run: () => openExport('all') },
       { label: t('export.filter'), disabled: !loaded, run: () => openExport('filter') },
       { label: t('export.selected'), disabled: !sel || !state.selectedExportable, run: () => openExport('selected') },
@@ -471,6 +473,43 @@ function openExport(scope) {
       h('label', { class: 'field' }, h('span', {}, 'Scope'), scopeSel),
       h('div', { class: 'field' }, h('span', {}, 'Asset types'), types.map((n, i) => h('label', { class: 'check' }, checks[i], n))),
       h('label', { class: 'check' }, asJson, 'Also dump every other object as JSON (needs type trees)'),
+      result,
+    ],
+    actions: [{ label: t('common.close') }, { label: t('common.export'), primary: true, close: false, run }],
+  });
+}
+
+// ---------------------------------------------------------------- Unity project export dialog
+function openProjectExport() {
+  const out = h('input', { type: 'text', value: state.info.defaultOutDir, spellcheck: 'false', 'aria-label': 'Output folder' });
+  const name = h('input', { type: 'text', value: 'ExportedProject', spellcheck: 'false', 'aria-label': 'Project folder name' });
+  const result = h('div', { 'aria-live': 'polite' });
+  let running = false;
+  const run = async () => {
+    if (running) return;
+    if (!out.value.trim()) { toast('Choose an output folder.', 'error'); return; }
+    running = true;
+    clear(result).append(h('p', { class: 'note' }, t('status.exporting')));
+    try {
+      const r = await setBusy(t('status.exporting'), () => apiJson('/api/project', { method: 'POST', body: { outDir: out.value.trim(), name: name.value.trim() } }));
+      const reasons = Object.entries(r.skippedByReason).sort((a, b) => b[1] - a[1]);
+      clear(result).append(
+        h('div', { class: 'stats' }, [['textures', r.textures], ['scenes', r.scenes], ['prefabs', r.prefabs], ['other assets', r.yamlAssets], ['text', r.text], ['audio', r.audio]]
+          .map(([l, n]) => h('div', { class: 'stat' }, h('b', {}, fmtNum(n)), h('span', {}, l)))),
+        h('p', {}, 'Open this folder in Unity ', h('span', { class: 'okc' }, r.unityVersion || '(matching version)'), ': ', h('span', { class: 'okc' }, r.projectDir)),
+        reasons.length ? h('div', { class: 'problems', tabindex: '0' }, h('div', { class: 'note' }, `${fmtNum(r.skippedCount)} object(s) not exported`),
+          reasons.map(([why, n]) => h('div', {}, `${fmtNum(n)} × ${why}`))) : null,
+        h('p', { class: 'dim' }, 'Details are in XeraRipper-Report.md inside the project folder.'));
+    } catch (e) { clear(result).append(h('p', { class: 'err' }, e.message)); }
+    running = false;
+  };
+  openModal({
+    title: t('export.project'), wide: true,
+    body: [
+      h('label', { class: 'field' }, h('span', {}, 'Output folder (on the machine running Xera Ripper)'), out),
+      h('label', { class: 'field' }, h('span', {}, 'Project folder name'), name),
+      h('p', { class: 'dim' }, 'Builds Assets/ (textures as PNG, text, audio, scenes, prefabs, materials and other assets in Unity’s text format), '
+        + 'ProjectSettings/ and .meta files with stable GUIDs. Scripts are not decompiled; see the report for what was left out.'),
       result,
     ],
     actions: [{ label: t('common.close') }, { label: t('common.export'), primary: true, close: false, run }],

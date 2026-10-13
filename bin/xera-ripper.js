@@ -13,6 +13,8 @@ Usage
   xera-ripper serve [path] [--port 8765]        start the web UI (optionally pre-loading a path)
   xera-ripper list <path> [--type T] [--filter text] [--limit N]
   xera-ripper rip  <path> -o <dir> [--types Texture2D,TextAsset,AudioClip] [--json]
+  xera-ripper project <path> -o <dir> [--name ExportedProject]
+                                                build a Unity project (Assets/, ProjectSettings/, .meta, scenes, prefabs)
   xera-ripper dump <path> --id N                print one object's decoded fields as JSON
 
 <path> may be a UnityFS bundle, a serialized file (level0, *.assets), a folder, or an .apk/.zip.
@@ -24,7 +26,7 @@ const { values: o, positionals } = parseArgs({
   options: {
     out: { type: 'string', short: 'o' }, types: { type: 'string' }, json: { type: 'boolean', default: false },
     type: { type: 'string' }, filter: { type: 'string' }, limit: { type: 'string' }, id: { type: 'string' },
-    port: { type: 'string' }, help: { type: 'boolean', short: 'h' },
+    port: { type: 'string' }, name: { type: 'string' }, help: { type: 'boolean', short: 'h' },
   },
 });
 
@@ -74,6 +76,18 @@ switch (cmd) {
     for (const i of r.items) if (i.status !== 'ok') process.stderr.write(`${i.status}: ${i.type} ${i.name} ${i.note ?? ''}\n`);
     process.stdout.write(`\nwritten ${r.written}, raw ${r.raw}, without type tree ${r.noTypeTree}, failed ${r.failed}\n-> ${r.outDir}\n`);
     process.exit(r.failed ? 2 : 0);
+    break;
+  }
+  case 'project': {
+    if (!o.out) die('project needs -o <output folder>');
+    const s = load(target);
+    let r;
+    try { r = s.exportProject({ outDir: o.out, projectName: o.name ?? 'ExportedProject' }); } catch (e) { die(e.message); }
+    const reasons = Object.entries(r.skippedByReason).sort((a, b) => b[1] - a[1]);
+    process.stdout.write(`\nUnity project (${r.unityVersion || 'unknown version'}): ${r.textures} textures, ${r.text} text, ${r.audio} audio, `
+      + `${r.scenes} scenes, ${r.prefabs} prefabs, ${r.yamlAssets} other assets\n`);
+    if (reasons.length) process.stdout.write(`not exported: ${r.skipped.length}\n${reasons.map(([why, n]) => `  ${n} x ${why}`).join('\n')}\n`);
+    process.stdout.write(`-> ${r.projectDir}\nOpen that folder with Unity ${r.unityVersion || '(the matching version)'}. See XeraRipper-Report.md inside it.\n`);
     break;
   }
   case 'dump': {

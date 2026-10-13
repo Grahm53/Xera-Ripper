@@ -87,6 +87,7 @@ export function typeTreeBlob(nodes, serializedVersion, little = true) {
 export function buildSerializedFile(opts) {
   const {
     version = 19, unityVersion = '2019.4.31f1', platform = 13, little = true, enableTypeTree = true, types, objects,
+    externals = ['Library/unity default resources'],
   } = opts;
   const m = new Writer(little);
   // metadata starts right after the header; alignment inside it is relative to the start of the FILE, so we
@@ -133,10 +134,12 @@ export function buildSerializedFile(opts) {
     if (version === 15 || version === 16) meta.u8(0);
   }
   if (version >= 11) { meta.i32(0); } // script types
-  meta.i32(1); // externals
-  meta.cstring('');
-  meta.bytes(Buffer.alloc(16)); meta.i32(0);
-  meta.cstring('Library/unity default resources');
+  meta.i32(externals.length); // externals
+  for (const path of externals) {
+    meta.cstring('');
+    meta.bytes(Buffer.alloc(16)); meta.i32(0);
+    meta.cstring(path);
+  }
   if (version >= 20) meta.i32(0);      // ref types
   if (version >= 5) meta.cstring('');  // user information
 

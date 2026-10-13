@@ -118,14 +118,9 @@ export class TypeTreeDatabase {
     return found?.cls ?? null;
   }
 
-  // Runtime ("release") type tree for a class at a given Unity version string, or null when unknown.
-  treeFor(classId, unityVersion) {
-    const v = encodeUnityVersion(unityVersion);
-    if (v === null) return null;
-    const cls = this._classFor(classId, v);
-    if (!cls || cls.releaseRoot === null) return null;
-    if (this._trees.has(cls)) return this._trees.get(cls);
-
+  _build(cls, rootId) {
+    const key = `${rootId}`;
+    if (this._trees.has(key)) return this._trees.get(key);
     const out = [];
     const walk = (id, level) => {
       const n = this.nodes[id];
@@ -135,10 +130,57 @@ export class TypeTreeDatabase {
       });
       for (const sub of n.subs) walk(sub, level + 1);
     };
-    walk(cls.releaseRoot, 0);
+    walk(rootId, 0);
     const tree = new TypeTree(out);
-    this._trees.set(cls, tree);
+    this._trees.set(key, tree);
     return tree;
+  }
+
+  // Runtime ("release") type tree for a class at a given Unity version string, or null when unknown. This is the layout of
+  // data inside player builds, i.e. what stripped files contain.
+  treeFor(classId, unityVersion) {
+    const v = encodeUnityVersion(unityVersion);
+    if (v === null) return null;
+    const cls = this._classFor(classId, v);
+    return cls && cls.releaseRoot !== null ? this._build(cls, cls.releaseRoot) : null;
+  }
+
+  // The editor layout (what the Unity editor writes into .asset/.prefab/.unity YAML): extra editor-only fields, and the
+  // struct versions that become `serializedVersion`. Null when the class has none.
+  editorTreeFor(classId, unityVersion) {
+    const v = encodeUnityVersion(unityVersion);
+    if (v === null) return null;
+    const cls = this._classFor(classId, v);
+    return cls && cls.editorRoot !== null ? this._build(cls, cls.editorRoot) : null;
+  }
+
+  className(classId, unityVersion) {
+    const v = encodeUnityVersion(unityVersion);
+    const cls = v === null ? null : this._classFor(classId, v);
+    return cls ? this.strings[cls.name] ?? null : null;
+  }
+
+  // Names of the class and all its base classes, nearest first (e.g. MonoBehaviour, Behaviour, Component, EditorExtension, Object).
+  ancestry(classId, unityVersion) {
+    const v = encodeUnityVersion(unityVersion);
+    const out = [];
+    let cls = v === null ? null : this._classFor(classId, v);
+    for (let guard = 0; cls && guard < 32; guard++) {
+      out.push(this.strings[cls.name]);
+      const baseName = this.strings[cls.base];
+      if (!baseName || baseName === this.strings[cls.name]) break;
+      if (!this._nameToId) {
+        this._nameToId = new Map();
+        for (const [id, entries] of this.classes) {
+          const last = [...entries].reverse().find((e) => e.cls)?.cls;
+          if (last) this._nameToId.set(this.strings[last.name], id);
+        }
+      }
+      const baseId = this._nameToId.get(baseName);
+      cls = baseId === undefined ? null : this._classFor(baseId, v);
+      if (!cls) out.push(baseName);
+    }
+    return out;
   }
 }
 

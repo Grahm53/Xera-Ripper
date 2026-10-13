@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Session } from './session.js';
 import { EXPORTABLE } from './exporters.js';
 import { bigintReplacer } from './typeTree.js';
+import { safeSegment } from './names.js';
 
 const UI_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'ui');
 const MAX_BODY = 1024 * 1024;
@@ -150,6 +151,17 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
       catch (e) { throw new HttpError(500, `export failed: ${e.message}`); }
       const problems = r.items.filter((i) => i.status !== 'ok');
       return json(res, 200, { ...r, items: undefined, problems: problems.slice(0, 200), problemCount: problems.length });
+    }
+
+    if (route === 'POST /api/project') {
+      const b = await readJson(req);
+      if (typeof b.outDir !== 'string' || !b.outDir.trim()) throw new HttpError(400, 'outDir is required');
+      if (!session.loaded) throw new HttpError(409, 'nothing is loaded');
+      const name = typeof b.name === 'string' && b.name.trim() ? safeSegment(b.name.trim()) : 'ExportedProject';
+      let r;
+      try { r = session.exportProject({ outDir: b.outDir.trim(), projectName: name }); }
+      catch (e) { throw new HttpError(500, `export failed: ${e.message}`); }
+      return json(res, 200, { ...r, skipped: r.skipped.slice(0, 200), skippedCount: r.skipped.length });
     }
 
     throw new HttpError(404, 'unknown endpoint');

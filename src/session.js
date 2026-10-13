@@ -5,6 +5,8 @@ import { isUnityFs, legacyBundleKind, parseUnityFs } from './unityFs.js';
 import { SerializedFile, looksLikeSerializedFile, NoTypeTreeError } from './serializedFile.js';
 import { buildExport, buildJson, canExport, EXPORTABLE } from './exporters.js';
 import { toJsonSafe } from './typeTree.js';
+import { safeSegment, safePath } from './names.js';
+import { exportUnityProject } from './unityProject.js';
 
 const PLATFORMS = { 2: 'macOS', 5: 'Windows', 9: 'iOS', 13: 'Android', 19: 'Windows64', 24: 'Linux64' };
 const SKIP_EXT = /\.(so|dex|png|jpe?g|xml|json|txt|ogg|mp3|wav|mp4|ttf|otf|ress|resource|arsc|rsa|sf|mf|dll|pdb|dat|md|html?|js|css|cs|kotlin_module|properties|version|apk|obb)$/i;
@@ -18,11 +20,13 @@ function isCandidate(entry) {
   return entry.size > 32 && entry.size <= MAX_FILE;
 }
 
-export function safeSegment(s) {
-  const cleaned = String(s).normalize('NFKC').replace(/[^\w.\- ]+/g, '_').replace(/^\.+/, '_').trim().slice(0, 100);
-  return cleaned || 'unnamed';
+export { safeSegment };
+
+// A GameObject's m_Name comes after its component list, so it cannot be peeked; they are small, so decode them in full.
+function gameObjectName(sf, obj) {
+  if (obj.classId !== 1) return '';
+  try { const n = sf.readObject(obj).m_Name; return typeof n === 'string' ? n : ''; } catch { return ''; }
 }
-const safePath = (p) => p.split('/').map(safeSegment).join('/');
 
 export class Session {
   constructor() { this.reset(); }
@@ -101,7 +105,7 @@ export class Session {
     for (const obj of sf.objects) {
       this.assets.push({
         id: this.assets.length, fileIndex: file.index, obj, className: obj.className, pathId: obj.pathId,
-        size: obj.byteSize, name: sf.peekName(obj) ?? '',
+        size: obj.byteSize, name: sf.peekName(obj) ?? gameObjectName(sf, obj),
       });
     }
   }
@@ -176,6 +180,13 @@ export class Session {
       return { mime: e.mime, data: e.data.length > 4 * 1024 * 1024 && e.mime.startsWith('text') ? e.data.subarray(0, 4 * 1024 * 1024) : e.data, ext: e.ext };
     }
     return { mime: 'application/json', data: buildJson(file, a), ext: 'json' };
+  }
+
+  // Build a Unity project (Assets/, ProjectSettings/, .meta files, scenes, prefabs) under outDir/<projectName>.
+  exportProject(opts) {
+    const r = exportUnityProject(this, opts);
+    this.log(`unity project at ${r.projectDir}: ${r.textures} textures, ${r.scenes} scenes, ${r.prefabs} prefabs, ${r.yamlAssets} other assets, ${r.skipped.length} not exported`);
+    return r;
   }
 
   // Write assets under outDir/<file>/<Class>/<name>_<pathId>.<ext>. Never throws per asset: failures are reported.
