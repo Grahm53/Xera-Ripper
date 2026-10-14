@@ -21,7 +21,14 @@ node tools/crosscheck/yaml_dump.mjs /tmp/yamldocs.json && /tmp/xv/bin/python too
 
 # 5. a whole exported project parses (scenes, prefabs, materials, every .meta)
 node bin/xera-ripper.js project <game> -o /tmp/proj && /tmp/xv/bin/python tools/crosscheck/yaml_project.py /tmp/proj/ExportedProject
+
+# 6. the web UI: every menu item is reachable with a REAL mouse at 11 window widths (needs Playwright + Chromium)
+node tools/crosscheck/ui_menus.mjs "$(npm root -g)"
 ```
+
+Why check 6 exists: the menu bar once clipped every dropdown (`overflow-x: auto`), and Playwright's own `click()` scrolls hidden containers
+into view, so ordinary UI tests passed while a person could not click any menu item. It asks the browser what is under the pointer and clicks
+with raw coordinates; it fails on the old stylesheet.
 
 What this has caught so far: the meaning of bundle flag `0x200` depends on the Unity version (encryption vs padding); format-6
 bundles from Unity 2019.4.15+ are 16-byte aligned; DXT1 must decode as opaque; DXT rounding must be bit-replication + truncating

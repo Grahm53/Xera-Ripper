@@ -7,7 +7,15 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Publish a GitHub Release with this tag (e.g. v0.1.0). Leave empty to only build and test.'
+        description: 'Publish a GitHub Release with this tag (e.g. v0.1.1). Leave empty to only build and test.'
+        required: false
+        default: ''
+      release_notes:
+        description: 'Release notes (optional; generated from commits if empty)'
+        required: false
+        default: ''
+      supersede_tag:
+        description: 'Older release to mark as superseded by release_tag (optional, e.g. v0.1.0)'
         required: false
         default: ''
   push:
@@ -53,10 +61,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref_name }}
+          NOTES: ${{ inputs.release_notes }}
+          OLD_TAG: ${{ inputs.supersede_tag }}
         run: |
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "release tag must look like v1.2.3, got: $TAG"; exit 1; fi
+          semver='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          if ! [[ "$TAG" =~ $semver ]]; then echo "release tag must look like v1.2.3, got: $TAG"; exit 1; fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/xera-ripper.exe dist/xera-ripper.exe.sha256 --clobber
+            if [ -n "$NOTES" ]; then gh release edit "$TAG" --notes "$NOTES"; fi
+          elif [ -n "$NOTES" ]; then
+            gh release create "$TAG" dist/xera-ripper.exe dist/xera-ripper.exe.sha256 --target "$GITHUB_SHA" --title "Xera Ripper $TAG" --notes "$NOTES"
           else
             gh release create "$TAG" dist/xera-ripper.exe dist/xera-ripper.exe.sha256 --target "$GITHUB_SHA" --title "Xera Ripper $TAG" --generate-notes
+          fi
+          if [ -n "$OLD_TAG" ]; then
+            if ! [[ "$OLD_TAG" =~ $semver ]]; then echo "supersede_tag must look like v1.2.3"; exit 1; fi
+            gh release edit "$OLD_TAG" --prerelease --notes "Superseded by $TAG. Please download $TAG instead: https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TAG"
           fi

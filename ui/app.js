@@ -207,11 +207,13 @@ function openCredits() {
   if (state.view !== 'credits') state.prevView = state.view;
   state.view = 'credits';
   renderAll();
-  $('#view').focus();
+  window.scrollTo(0, 0);
+  $('#credits-title')?.focus({ preventScroll: true }); // announced as "Credits"; focusing the tall <main> used to scroll the page
 }
 function closeCredits() {
   const back = state.prevView && state.prevView !== 'credits' ? state.prevView : state.summary ? 'assets' : 'welcome';
   setView(back);
+  window.scrollTo(0, 0);
 }
 
 async function showLog() {
@@ -558,7 +560,7 @@ function renderCredits(view) {
   view.append(h('section', { class: 'credits', 'aria-labelledby': 'credits-title' },
     h('div', { class: 'credits-head' },
       h('button', { type: 'button', class: 'btn small', onclick: closeCredits }, t('credits.back')),
-      h('h1', { id: 'credits-title' }, 'Credits')),
+      h('h1', { id: 'credits-title', tabindex: '-1' }, 'Credits')),
 
     h('article', { class: 'profile', 'aria-label': `About ${OWNER.name}` },
       h('div', { class: 'banner' }, h('img', { src: '/ui/img/banner.jpg', alt: `${OWNER.name}’s profile banner`, width: '1600', height: '467' })),
@@ -580,8 +582,7 @@ function renderCredits(view) {
 
     h('h2', { class: 'sect' }, 'Built with help from'),
     h('ul', { class: 'thanks' }, THIRD_PARTY.map(([name, what, href]) => h('li', {},
-      href ? extLink(href, name) : h('b', {}, name), h('span', {}, what)))),
-    h('p', { class: 'dim' }, `© ${new Date().getFullYear()} Xera Games LLC. All rights reserved.`)));
+      href ? extLink(href, name) : h('b', {}, name), h('span', {}, what)))),));
 }
 
 // ---------------------------------------------------------------- shell

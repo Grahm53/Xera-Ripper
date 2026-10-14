@@ -10,7 +10,7 @@ import { safeSegment } from './names.js';
 import { readAsset } from './assets.js';
 
 const MAX_BODY = 1024 * 1024;
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 
 // Only these files are ever served (explicit allow-list, so no path handling is needed at all). `key` is the bundled
 // asset key: a file under ui/ normally, an embedded resource inside the single-file .exe build.
