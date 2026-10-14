@@ -4,9 +4,17 @@
   "private": true,
   "type": "module",
   "description": "Xera Ripper: dependency-free Unity asset extractor. Reads UnityFS bundles, serialized files, directories and APKs; exports textures, text and audio.",
-  "engines": { "node": ">=20" },
-  "bin": { "xera-ripper": "bin/xera-ripper.js" },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "xera-ripper": "bin/xera-ripper.js"
+  },
   "scripts": {
     "test": "node --test"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "postject": "1.0.0-alpha.6"
   }
 }

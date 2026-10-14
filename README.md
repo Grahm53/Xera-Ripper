@@ -10,14 +10,31 @@ browse every object inside, preview it, export it, or **export a whole Unity pro
 > analysing your own projects). Re-releasing someone else's art/audio is a copyright problem, not a tool problem.
 > This is an independent implementation written from the public file-format behaviour; it contains no code from AssetRipper.
 
-## Run it
+## Windows: just double-click `xera-ripper.exe`
+
+No Node.js and no install: **`xera-ripper.exe` is one file** with everything inside it.
+
+- **Double-click it.** A black window opens and your browser opens Xera Ripper by itself (if it doesn't, copy the link shown in the window).
+  Close the window to stop it.
+- **Or drag a game file/folder onto the `.exe`** (an `.apk`, a bundle, a `level0` file, a game's `_Data` folder): it starts with that loaded.
+- Command line works too: `xera-ripper.exe project "C:\Games\MyGame.apk" -o "C:\out"`.
+
+**Windows will warn you** ("Windows protected your PC" / SmartScreen) because the file is not code-signed: click **More info → Run anyway**.
+Some antivirus programs also distrust any freshly built, unsigned program. You can check the file you got against the `xera-ripper.exe.sha256`
+that is published with it.
+
+How it is built: Node.js "Single Executable Application" (the official `node.exe` with this app embedded; `node tools/build-exe.mjs --target win32`).
+The GitHub workflow `Windows exe` builds it on a real Windows runner and smoke-tests the result (starts the UI, serves the embedded files,
+exports a Unity project, loads a dropped folder) before publishing it as an artifact (and on a Release when a `v*` tag is pushed).
+
+## Run it (with Node.js, any OS)
 
 ```bash
 node bin/xera-ripper.js serve            # prints a link like http://127.0.0.1:8765/?t=<token>
 node bin/xera-ripper.js serve ~/MyGame   # same, with a path pre-loaded
 ```
 
-Open the printed link. **File → Open File… / Open Folder…** (or paste a path), browse and preview assets, then
+Open the printed link (the `.exe` does this for you). **File → Open File… / Open Folder…** (or paste a path), browse and preview assets, then
 **Export → Export Unity project…** (or **Export all…** for loose files). Requires Node 20+. No `npm install` (zero dependencies).
 
 CLI:
@@ -102,7 +119,10 @@ exports are confined to the chosen folder and file names are sanitised.
 ## Tests
 
 ```bash
-npm test
+npm test                                   # unit tests
+node tools/build-exe.mjs                   # single-file build for this OS  (npm install first: esbuild + postject are build-time only)
+node tools/build-exe.mjs --target win32    # xera-ripper.exe from any OS
+node tools/smoke-exe.mjs dist/xera-ripper.exe   # runs the real executable end to end
 ```
 
 ## Credits

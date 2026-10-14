@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { BinaryReader } from './binaryReader.js';
+import { readAsset } from './assets.js';
 import { lzmaDecode } from './lzma.js';
 import { TypeTree } from './typeTree.js';
 
@@ -188,7 +188,7 @@ let shared;
 // The bundled database, loaded once on first use. Returns null if the data file is missing or unreadable.
 export function defaultTypeDatabase() {
   if (shared === undefined) {
-    try { shared = new TypeTreeDatabase(readFileSync(new URL('../data/lzma.tpk', import.meta.url))); } catch { shared = null; }
+    try { shared = new TypeTreeDatabase(readAsset('data/lzma.tpk')); } catch { shared = null; }
   }
   return shared;
 }

@@ -1,16 +1,25 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { Session } from '../src/session.js';
 import { EXPORTABLE } from '../src/exporters.js';
 import { createApp } from '../src/server.js';
 import { toJsonSafe } from '../src/typeTree.js';
+import { isSea } from '../src/assets.js';
+import { openBrowser } from '../src/openBrowser.js';
+import { resolveCommand, shouldOpenBrowser } from '../src/cli.js';
+
+const VERSION = '0.1.0';
 
 const HELP = `Xera Ripper: Unity asset extractor
 
 Usage
-  xera-ripper serve [path] [--port 8765]        start the web UI (optionally pre-loading a path)
+  xera-ripper                                   (the .exe, double-clicked) start the web UI and open your browser
+  xera-ripper <file-or-folder>                  (drag a game file onto the .exe) start the UI with it loaded
+  xera-ripper serve [path] [--port 8765] [--open|--no-open]
+                                                start the web UI (optionally pre-loading a path)
   xera-ripper list <path> [--type T] [--filter text] [--limit N]
   xera-ripper rip  <path> -o <dir> [--types Texture2D,TextAsset,AudioClip] [--json]
   xera-ripper project <path> -o <dir> [--name ExportedProject]
@@ -27,13 +36,25 @@ const { values: o, positionals } = parseArgs({
     out: { type: 'string', short: 'o' }, types: { type: 'string' }, json: { type: 'boolean', default: false },
     type: { type: 'string' }, filter: { type: 'string' }, limit: { type: 'string' }, id: { type: 'string' },
     port: { type: 'string' }, name: { type: 'string' }, help: { type: 'boolean', short: 'h' },
+    open: { type: 'boolean', default: false }, 'no-open': { type: 'boolean', default: false }, version: { type: 'boolean', short: 'v' },
   },
 });
 
-const [cmd, target] = positionals;
+if (o.version) { process.stdout.write(`xera-ripper ${VERSION}${isSea ? ' (single-file build)' : ''}\n`); process.exit(0); }
+const resolved = resolveCommand(positionals, { isSea, exists: (p) => existsSync(p) });
+const { cmd, target } = resolved;
 if (o.help || !cmd) { process.stdout.write(HELP); process.exit(cmd || o.help ? 0 : 1); }
 
-function die(msg) { process.stderr.write(`xera-ripper: ${msg}\n`); process.exit(1); }
+// A double-clicked .exe lives in its own console window that vanishes on exit; keep errors readable there.
+async function pauseIfDoubleClicked() {
+  if (!(isSea && process.platform === 'win32' && process.stdin.isTTY)) return;
+  process.stdout.write('\nPress Enter to close this window...');
+  await new Promise((resolve) => { process.stdin.resume(); process.stdin.once('data', resolve); });
+}
+
+class Fatal extends Error {}
+// Stops the command with a one-line message (no stack trace); handled once, at the bottom of this file.
+function die(msg) { throw new Fatal(msg); }
 
 function load(path) {
   if (!path) die(`"${cmd}" needs a <path>`);
@@ -44,6 +65,7 @@ function load(path) {
   return s;
 }
 
+async function main() {
 switch (cmd) {
   case 'serve': {
     const app = createApp({ defaultOutDir: join(homedir(), 'xera-ripper-out') });
@@ -52,8 +74,17 @@ switch (cmd) {
     }
     const port = o.port === undefined ? 8765 : Number(o.port);
     if (!Number.isInteger(port) || port < 0 || port > 65535) die('invalid --port');
-    const { url } = await app.start({ port }).catch((e) => die(e.code === 'EADDRINUSE' ? `port ${port} is in use (try --port 0 for a free one)` : e.message));
-    process.stdout.write(`\n  =(X)=  Xera Ripper\n\n  Open this link in your browser:\n  ${url}\n\n  (listens on 127.0.0.1 only; the link carries a one-time access token)\n  Ctrl+C to stop.\n\n`);
+    // default port first; if it is taken (e.g. a second copy is open) fall back to any free one
+    const started = await app.start({ port }).catch(async (e) => {
+      if (e.code === 'EADDRINUSE' && o.port === undefined) return app.start({ port: 0 });
+      return die(e.code === 'EADDRINUSE' ? `port ${port} is in use (try --port 0 for a free one)` : e.message);
+    });
+    const { url } = started;
+    const open = shouldOpenBrowser({ autoOpen: resolved.autoOpen, open: o.open, noOpen: o['no-open'] });
+    process.stdout.write(`\n  =(X)=  Xera Ripper ${VERSION}\n\n  Your browser should open by itself. If it does not, open this link:\n  ${url}\n\n`
+      + `  (listens on 127.0.0.1 only; the link carries a one-time access token)\n  ${isSea ? 'Close this window to stop Xera Ripper.' : 'Ctrl+C to stop.'}\n\n`);
+    if (resolved.dropped && target) process.stdout.write(`  Loaded: ${target}\n${resolved.extra?.length ? `  (only the first of ${1 + resolved.extra.length} dropped items was loaded)\n` : ''}\n`);
+    if (open) openBrowser(url);
     process.on('SIGINT', () => app.stop().then(() => process.exit(0)));
     break;
   }
@@ -103,3 +134,11 @@ switch (cmd) {
     process.stderr.write(`unknown command "${cmd}"\n\n${HELP}`);
     process.exit(1);
 }
+}
+
+main().catch(async (e) => {
+  process.stderr.write(`xera-ripper: ${e?.message ?? e}\n`);
+  if (!(e instanceof Fatal) && process.env.XERA_DEBUG) process.stderr.write(`${e?.stack ?? ''}\n`);
+  await pauseIfDoubleClicked();
+  process.exit(1);
+});

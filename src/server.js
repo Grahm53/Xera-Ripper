@@ -1,27 +1,29 @@
 import http from 'node:http';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Session } from './session.js';
 import { EXPORTABLE } from './exporters.js';
 import { bigintReplacer } from './typeTree.js';
 import { safeSegment } from './names.js';
+import { readAsset } from './assets.js';
 
-const UI_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'ui');
 const MAX_BODY = 1024 * 1024;
 const VERSION = '0.1.0';
 
-// Only these files are ever served from ui/ (explicit allow-list, so no path handling is needed at all).
-const STATIC = {
-  '/ui/style.css': { file: 'style.css', type: 'text/css; charset=utf-8' },
-  '/ui/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
-  '/ui/fonts/KodeMono-VariableFont_wght.ttf': { file: 'fonts/KodeMono-VariableFont_wght.ttf', type: 'font/ttf' },
-  '/ui/img/banner.jpg': { file: 'img/banner.jpg', type: 'image/jpeg' },
-  '/ui/img/banner2.jpg': { file: 'img/banner2.jpg', type: 'image/jpeg' },
-  '/ui/img/pfp.jpg': { file: 'img/pfp.jpg', type: 'image/jpeg' },
+// Only these files are ever served (explicit allow-list, so no path handling is needed at all). `key` is the bundled
+// asset key: a file under ui/ normally, an embedded resource inside the single-file .exe build.
+export const STATIC = {
+  '/ui/style.css': { key: 'ui/style.css', type: 'text/css; charset=utf-8' },
+  '/ui/app.js': { key: 'ui/app.js', type: 'text/javascript; charset=utf-8' },
+  '/ui/fonts/KodeMono-VariableFont_wght.ttf': { key: 'ui/fonts/KodeMono-VariableFont_wght.ttf', type: 'font/ttf' },
+  '/ui/img/banner.jpg': { key: 'ui/img/banner.jpg', type: 'image/jpeg' },
+  '/ui/img/banner2.jpg': { key: 'ui/img/banner2.jpg', type: 'image/jpeg' },
+  '/ui/img/pfp.jpg': { key: 'ui/img/pfp.jpg', type: 'image/jpeg' },
 };
+// Everything the exe builder has to embed: the static files, the page template and the type-tree database.
+export const BUNDLED_ASSETS = ['ui/index.html', 'data/lzma.tpk', ...Object.values(STATIC).map((s) => s.key)];
 
 const CSP = [
   "default-src 'none'", "script-src 'self'", "style-src 'self'", "font-src 'self'", "img-src 'self' blob: data:",
@@ -88,7 +90,7 @@ function intParam(v, dflt, min, max) {
 
 // Returns { server, token, start(): Promise<url> }. Nothing listens until start() is called.
 export function createApp({ session = new Session(), token = randomBytes(24).toString('base64url'), defaultOutDir = join(homedir(), 'xera-ripper-out') } = {}) {
-  const indexHtml = readFileSync(join(UI_DIR, 'index.html'), 'utf8');
+  const indexHtml = readAsset('ui/index.html').toString('utf8');
   let port = 0;
 
   const send = (res, status, body, type, extra = {}) => {
@@ -187,7 +189,7 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
         return send(res, 200, indexHtml.replace('__XERA_TOKEN__', token), 'text/html; charset=utf-8', { 'Content-Security-Policy': CSP, 'Cache-Control': 'no-store' });
       }
       const st = Object.hasOwn(STATIC, url.pathname) ? STATIC[url.pathname] : null;
-      if (st) return send(res, 200, readFileSync(join(UI_DIR, st.file)), st.type, { 'Cache-Control': 'no-cache' });
+      if (st) return send(res, 200, readAsset(st.key), st.type, { 'Cache-Control': 'no-cache' });
       throw new HttpError(404, 'not found');
     } catch (e) {
       const status = e instanceof HttpError ? e.status : 500;
