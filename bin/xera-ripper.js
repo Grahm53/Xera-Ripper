@@ -11,7 +11,7 @@ import { isSea } from '../src/assets.js';
 import { openBrowser } from '../src/openBrowser.js';
 import { resolveCommand, shouldOpenBrowser } from '../src/cli.js';
 
-const VERSION = '0.1.1';
+const VERSION = '0.2.0';
 
 const HELP = `Xera Ripper: Unity asset extractor
 

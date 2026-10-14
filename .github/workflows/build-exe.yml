@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Publish a GitHub Release with this tag (e.g. v0.1.1). Leave empty to only build and test.'
+        description: 'Publish a GitHub Release with this tag (e.g. v0.2.0). Leave empty to only build and test.'
         required: false
         default: ''
       release_notes:

@@ -37,6 +37,7 @@ export class Session {
     this.inputPath = null;
     this.files = [];
     this.assets = [];
+    this.bundles = [];
     this.skipped = [];
     this.logLines = [];
     this.loadedAt = null;
@@ -84,23 +85,31 @@ export class Session {
         const m = bundle.files.find((f) => baseOf(f.path).toLowerCase() === b);
         return m ? m.data : this.source.find(p);
       };
+      const rec = { index: this.bundles.length, name, unityRevision: bundle.unityRevision, formatVersion: bundle.version, size: buf.length, members: [] };
+      this.bundles.push(rec);
       let any = false;
       for (const m of bundle.files) {
+        const member = { path: m.path, size: m.data.length, kind: 'resource', fileIndex: null };
+        rec.members.push(member);
         if ((m.flags & 4) === 0 && !looksLikeSerializedFile(m.data)) continue;
-        try { this._addFile(`${name}/${m.path}`, m.data, resolveRes, `UnityFS ${bundle.unityRevision}`); any = true; }
-        catch (e) { this._skip(`${name}/${m.path}`, e.message); }
+        try {
+          const f = this._addFile(`${name}/${m.path}`, m.data, resolveRes, `UnityFS ${bundle.unityRevision}`, rec.index);
+          member.kind = 'serialized';
+          member.fileIndex = f.index;
+          any = true;
+        } catch (e) { this._skip(`${name}/${m.path}`, e.message); }
       }
       if (!any) this.log(`${name}: bundle contains no serialized files`);
       return;
     }
     const legacy = legacyBundleKind(buf);
     if (legacy) { this._skip(name, `legacy ${legacy} web bundle is not supported`); return; }
-    if (looksLikeSerializedFile(buf)) this._addFile(name, buf, (p) => this.source.find(p), 'serialized');
+    if (looksLikeSerializedFile(buf)) this._addFile(name, buf, (p) => this.source.find(p), 'serialized', null);
   }
 
-  _addFile(name, data, resolveRes, container) {
+  _addFile(name, data, resolveRes, container, bundleIndex = null) {
     const sf = new SerializedFile(data, name);
-    const file = { index: this.files.length, name, container, sf, resolve: resolveRes };
+    const file = { index: this.files.length, name, container, sf, resolve: resolveRes, bundleIndex };
     this.files.push(file);
     for (const obj of sf.objects) {
       this.assets.push({
@@ -108,6 +117,7 @@ export class Session {
         size: obj.byteSize, name: sf.peekName(obj) ?? gameObjectName(sf, obj),
       });
     }
+    return file;
   }
 
   summary() {

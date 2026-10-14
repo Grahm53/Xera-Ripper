@@ -12,6 +12,8 @@ browse every object inside, preview it, export it, or **export a whole Unity pro
 
 ## Windows: just double-click `xera-ripper.exe`
 
+**Download:** https://github.com/Grahm53/Xera-Ripper/releases/latest/download/xera-ripper.exe
+
 No Node.js and no install: **`xera-ripper.exe` is one file** with everything inside it.
 
 - **Double-click it.** A black window opens and your browser opens Xera Ripper by itself (if it doesn't, copy the link shown in the window).
@@ -25,7 +27,7 @@ that is published with it.
 
 How it is built: Node.js "Single Executable Application" (the official `node.exe` with this app embedded; `node tools/build-exe.mjs --target win32`).
 The GitHub workflow `Windows exe` builds it on a real Windows runner and smoke-tests the result (starts the UI, serves the embedded files,
-exports a Unity project, loads a dropped folder) before publishing it as an artifact (and on a Release when a `v*` tag is pushed).
+exports a Unity project, loads a dropped folder) before publishing it as an artifact, and as a GitHub Release when you run the workflow from the Actions tab with a release tag.
 
 ## Run it (with Node.js, any OS)
 
@@ -45,6 +47,24 @@ xera-ripper rip     <path> -o out [--types Texture2D,TextAsset,AudioClip] [--jso
 xera-ripper project <path> -o out [--name ExportedProject]   # a Unity project: open the folder with Unity
 xera-ripper dump    <path> --id 12                           # one object's decoded fields as JSON
 ```
+
+## Using the web UI
+
+The page works like AssetRipper's: open something, then move between views with the **tab bar** (also in the **View** menu).
+Every view has its own address (`#/assets?type=Texture2D&sel=12&tab=hex`), so **Back, Forward, reload and copied links all work**.
+
+| View | What it shows |
+|---|---|
+| **Home** | What is loaded (assets, collections, bundles, scenes, Unity version), what is inside (click a type to list it), and the export buttons |
+| **Assets** | Searchable, filterable list of every object (by name, path ID, type or file). Click one for its tabs: **Overview** (preview of textures / audio / text, **Download**, export), **Data** (decoded fields as JSON), **Unity YAML** (the object in Unity's text format), **Hex** (raw bytes, paged, jump to an offset) |
+| **Collections** | One row per serialized file: container, Unity version, platform, object count, what is in it, and whether its type trees are embedded or come from the built-in database. Click to list that file's assets |
+| **Bundles** | Each UnityFS bundle and the files packed inside it, with links to their assets |
+| **Scenes** | Files that hold GameObjects; open one for its **hierarchy** (expand/collapse, find by name, components as links to the component's asset) |
+| **Credits** | Under Help |
+
+**Export → Export Unity project…** has an **export settings** list (textures, text, audio, scenes, prefabs, materials/meshes/other assets); your
+choices are remembered. On **Windows** the file dialog has a **This PC** button for switching drives, and a path pasted with quotes
+(`"C:\Games\MyGame"`, as Explorer's *Copy as path* gives it) is accepted everywhere a path can be typed.
 
 ## Export a Unity project
 
@@ -94,13 +114,16 @@ materials point at exported textures, scenes at materials, and so on. A referenc
 
 ## Verification status (honest)
 
-`npm test`: **116 tests**. On top of that, `tools/crosscheck/` compares against **independent implementations**
+`npm test`: **142 tests**. On top of that, `tools/crosscheck/` compares against **independent implementations**
 (UnityPy, `texture2ddecoder`, Pillow, liblz4, PyYAML) — see its README for how to re-run them:
 
 - 27 generated files (serialized v17-22, little/big endian, hashed IDs, 8 bundle layouts, 154 real-layout objects across Unity 2017-6000)
   decode **identically** in UnityPy.
 - The type-tree database reader yields identical trees to UnityPy for all 3,320 class × version pairs.
 - DXT1/DXT5 and the linear texture formats match the reference decoders pixel for pixel (RGB565 within 1).
+- The web UI (every tab, view, menu item and the Windows-style file dialog) is exercised with a **real mouse in Chromium at 11 window widths**
+  (`tools/crosscheck/ui_views.mjs`, `ui_menus.mjs`), failing on console errors, unreachable controls and horizontal page scroll. This is Chromium on Linux:
+  the Windows file dialog is tested against simulated Windows answers, and the `.exe` itself is smoke-tested on a real Windows runner in CI.
 - 1,437 generated Unity YAML documents (every class with an editor layout × 5 Unity versions, with deliberately awkward strings) parse with
   a real YAML parser and match the values they were generated from.
 
@@ -119,7 +142,9 @@ exports are confined to the chosen folder and file names are sanitised.
 ## Tests
 
 ```bash
-npm test                                   # unit tests
+npm test                                   # unit tests (no browser needed)
+node tools/crosscheck/ui_views.mjs  "$(npm root -g)"   # every tab and view with a real mouse at 11 window widths (needs Playwright + Chromium)
+node tools/crosscheck/ui_menus.mjs  "$(npm root -g)"   # every menu item, same idea
 node tools/build-exe.mjs                   # single-file build for this OS  (npm install first: esbuild + postject are build-time only)
 node tools/build-exe.mjs --target win32    # xera-ripper.exe from any OS
 node tools/smoke-exe.mjs dist/xera-ripper.exe   # runs the real executable end to end

@@ -1,5 +1,6 @@
 import http from 'node:http';
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync, existsSync } from 'node:fs';
+import nodePath from 'node:path';
 import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
@@ -8,9 +9,11 @@ import { EXPORTABLE } from './exporters.js';
 import { bigintReplacer } from './typeTree.js';
 import { safeSegment } from './names.js';
 import { readAsset } from './assets.js';
+import { cleanPath, DRIVES } from './paths.js';
+import * as views from './views.js';
 
 const MAX_BODY = 1024 * 1024;
-const VERSION = '0.1.1';
+const VERSION = '0.2.0';
 
 // Only these files are ever served (explicit allow-list, so no path handling is needed at all). `key` is the bundled
 // asset key: a file under ui/ normally, an embedded resource inside the single-file .exe build.
@@ -60,27 +63,38 @@ async function readJson(req) {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpError(400, 'invalid JSON body'); }
 }
 
-function browse(rawPath) {
-  let p = resolve(rawPath || homedir());
+// Folder listing for the "Open" dialog. Everything that touches the OS is injectable so Windows behaviour can be tested anywhere.
+export function browse(rawPath, { platform = process.platform, pathMod = nodePath, readdir = readdirSync, stat = statSync, exists = existsSync, home = homedir } = {}) {
+  const win = platform === 'win32';
+  const raw = cleanPath(rawPath, { home: home() });
+  if (win && raw.toLowerCase() === DRIVES) {
+    // "My Computer": every drive letter that exists (and is not a dead network mapping)
+    const drives = [];
+    for (const letter of 'CDEFGHIJKLMNOPQRSTUVWXYZAB') { try { if (exists(`${letter}:\\`)) drives.push({ name: `${letter}:\\`, type: 'dir' }); } catch { /* unavailable drive */ } }
+    return { path: DRIVES, parent: null, sep: pathMod.sep, selected: null, entries: drives, truncated: false, drives: true };
+  }
+  const typed = win && /^[A-Za-z]:$/.test(raw) ? `${raw}\\` : raw; // "C:" alone means "the current folder of C:" to Windows; people mean the drive
+  let p = pathMod.resolve(typed || home());
   let st;
-  try { st = statSync(p); } catch { throw new HttpError(404, `no such path: ${p}`); }
-  const selected = st.isFile() ? basename(p) : null;
-  if (selected) p = dirname(p);
+  try { st = stat(p); } catch { throw new HttpError(404, `no such path: ${p}`); }
+  const selected = st.isFile() ? pathMod.basename(p) : null;
+  if (selected) p = pathMod.dirname(p);
   let names;
-  try { names = readdirSync(p, { withFileTypes: true }); } catch (e) { throw new HttpError(403, `cannot read ${p}: ${e.code ?? e.message}`); }
+  try { names = readdir(p, { withFileTypes: true }); } catch (e) { throw new HttpError(403, `cannot read ${p}: ${e.code ?? e.message}`); }
   const entries = [];
   for (const d of names.slice(0, 5000)) {
     if (d.isSymbolicLink()) continue;
     if (d.isDirectory()) entries.push({ name: d.name, type: 'dir' });
     else if (d.isFile()) {
       let size = 0;
-      try { size = statSync(join(p, d.name)).size; } catch { /* unreadable: still list it */ }
+      try { size = stat(pathMod.join(p, d.name)).size; } catch { /* unreadable: still list it */ }
       entries.push({ name: d.name, type: 'file', size });
     }
   }
   entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
-  const parent = dirname(p);
-  return { path: p, parent: parent === p ? null : parent, sep, selected, entries, truncated: names.length > 5000 };
+  const up = pathMod.dirname(p);
+  const parent = up === p ? (win ? DRIVES : null) : up; // above a drive root there is the list of drives
+  return { path: p, parent, sep: pathMod.sep, selected, entries, truncated: names.length > 5000 };
 }
 
 function intParam(v, dflt, min, max) {
@@ -108,16 +122,17 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
     const q = url.searchParams;
 
     if (route === 'GET /api/state') {
-      return json(res, 200, { version: VERSION, loaded: session.loaded, summary: session.loaded ? session.summary() : null, defaultOutDir, exportable: EXPORTABLE, home: homedir() });
+      return json(res, 200, { version: VERSION, loaded: session.loaded, summary: session.loaded ? session.summary() : null, defaultOutDir, exportable: EXPORTABLE, home: homedir(), platform: process.platform });
     }
-    if (route === 'GET /api/browse') return json(res, 200, browse(q.get('path')));
+    if (route === 'GET /api/browse') return json(res, 200, browse(q.get('path') ?? ''));
     if (route === 'GET /api/log') return json(res, 200, { lines: session.logLines });
     if (route === 'POST /api/reset') { session.reset(); return json(res, 200, { ok: true }); }
 
     if (route === 'POST /api/load') {
-      const { path } = await readJson(req);
-      if (typeof path !== 'string' || !path.trim()) throw new HttpError(400, 'path is required');
-      try { return json(res, 200, session.load(path.trim())); }
+      const body = await readJson(req);
+      if (typeof body.path !== 'string' || !cleanPath(body.path)) throw new HttpError(400, 'path is required');
+      const path = cleanPath(body.path);
+      try { return json(res, 200, session.load(path)); }
       catch (e) { session.reset(); throw new HttpError(400, e.code === 'ENOENT' ? `no such file or folder: ${path}` : e.message); }
     }
 
@@ -129,11 +144,27 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
       }));
     }
 
-    const m = /^\/api\/asset\/(\d+)(\/preview)?$/.exec(url.pathname);
+    if (route === 'GET /api/collections') return json(res, 200, views.collections(session));
+    if (route === 'GET /api/bundles') return json(res, 200, views.bundles(session));
+    if (route === 'GET /api/scenes') return json(res, 200, views.scenes(session));
+    const sc = /^\/api\/scene\/(\d+)$/.exec(url.pathname);
+    if (sc && req.method === 'GET') {
+      try { return json(res, 200, views.sceneTree(session, Number(sc[1]))); } catch (e) { throw new HttpError(e instanceof RangeError ? 422 : 500, e.message); }
+    }
+
+    const m = /^\/api\/asset\/(\d+)(\/preview|\/hex|\/yaml)?$/.exec(url.pathname);
     if (m && req.method === 'GET') {
       const id = Number(m[1]);
       if (!session.assets[id]) throw new HttpError(404, 'no such asset');
       if (!m[2]) return json(res, 200, session.detail(id));
+      if (m[2] === '/hex') {
+        try { return json(res, 200, views.hex(session, id, intParam(q.get('offset'), 0, 0, 2 ** 40), intParam(q.get('limit'), 4096, 1, views.MAX_HEX_CHUNK))); }
+        catch (e) { throw new HttpError(422, e.message); }
+      }
+      if (m[2] === '/yaml') {
+        try { return send(res, 200, views.yaml(session, id), 'text/plain; charset=utf-8', { 'Cache-Control': 'no-store' }); }
+        catch (e) { throw new HttpError(422, e.message); }
+      }
       try {
         const p = session.preview(id);
         return send(res, 200, p.data, p.mime, { 'Cache-Control': 'no-store', 'Content-Disposition': 'inline' });
@@ -142,7 +173,7 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
 
     if (route === 'POST /api/export') {
       const b = await readJson(req);
-      if (typeof b.outDir !== 'string' || !b.outDir.trim()) throw new HttpError(400, 'outDir is required');
+      if (typeof b.outDir !== 'string' || !cleanPath(b.outDir)) throw new HttpError(400, 'outDir is required');
       if (!session.loaded) throw new HttpError(409, 'nothing is loaded');
       const types = Array.isArray(b.types) ? b.types.filter((t) => EXPORTABLE.includes(t)) : EXPORTABLE;
       let ids = null;
@@ -152,7 +183,7 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
         ids = session.ids({ q: String(f.q ?? ''), type: String(f.type ?? ''), file: f.file === null || f.file === '' || f.file === undefined ? null : Number(f.file) });
       }
       let r;
-      try { r = session.export({ outDir: b.outDir.trim(), types, ids, json: b.json === true }); }
+      try { r = session.export({ outDir: cleanPath(b.outDir), types, ids, json: b.json === true }); }
       catch (e) { throw new HttpError(500, `export failed: ${e.message}`); }
       const problems = r.items.filter((i) => i.status !== 'ok');
       return json(res, 200, { ...r, items: undefined, problems: problems.slice(0, 200), problemCount: problems.length });
@@ -160,11 +191,13 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
 
     if (route === 'POST /api/project') {
       const b = await readJson(req);
-      if (typeof b.outDir !== 'string' || !b.outDir.trim()) throw new HttpError(400, 'outDir is required');
+      if (typeof b.outDir !== 'string' || !cleanPath(b.outDir)) throw new HttpError(400, 'outDir is required');
       if (!session.loaded) throw new HttpError(409, 'nothing is loaded');
       const name = typeof b.name === 'string' && b.name.trim() ? safeSegment(b.name.trim()) : 'ExportedProject';
       let r;
-      try { r = session.exportProject({ outDir: b.outDir.trim(), projectName: name }); }
+      const include = {};
+      for (const k of ['textures', 'text', 'audio', 'scenes', 'prefabs', 'assets']) if (b.include && typeof b.include[k] === 'boolean') include[k] = b.include[k];
+      try { r = session.exportProject({ outDir: cleanPath(b.outDir), projectName: name, include }); }
       catch (e) { throw new HttpError(500, `export failed: ${e.message}`); }
       return json(res, 200, { ...r, skipped: r.skipped.slice(0, 200), skippedCount: r.skipped.length });
     }

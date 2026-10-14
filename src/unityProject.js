@@ -37,7 +37,7 @@ const NOT_EXPORTED = {
   290: 'AssetBundleManifest',
 };
 const MANAGER_FILE = /(^|\/)(globalgamemanagers(\.assets)?|unity default resources|unity_builtin_extra)$/i;
-const TAGS = { 0: 'Untagged', 1: 'Respawn', 2: 'Finish', 3: 'EditorOnly', 5: 'MainCamera', 6: 'Player', 7: 'GameController' };
+export const TAGS = { 0: 'Untagged', 1: 'Respawn', 2: 'Finish', 3: 'EditorOnly', 5: 'MainCamera', 6: 'Player', 7: 'GameController' };
 const FALLBACK_SCENE_CLASSES = new Set([
   1, 4, 224, 20, 23, 33, 54, 64, 65, 108, 81, 82, 95, 111, 114, 135, 136, 137, 198, 199, 212, 222, 223, 225, 120, 96, 104, 157, 29, 196,
 ]);
@@ -105,9 +105,11 @@ function textureMeta(guid, tex, unityVersion) {
 }
 
 export class ProjectExporter {
-  constructor(session, { outDir, onProgress = null, projectName = 'ExportedProject' } = {}) {
+  constructor(session, { outDir, onProgress = null, projectName = 'ExportedProject', include = {} } = {}) {
     if (!outDir) throw new Error('outDir is required');
     this.session = session;
+    // export settings: every kind is on unless switched off
+    this.include = { textures: true, text: true, audio: true, scenes: true, prefabs: true, assets: true, ...include };
     this.root = resolve(outDir, projectName);
     this.onProgress = onProgress;
     this.db = defaultTypeDatabase();
@@ -280,6 +282,8 @@ export class ProjectExporter {
     const key = `${file.index}:${a.pathId}`;
     const containerPath = this.containerPath.get(key);
     if (NOT_EXPORTED[a.obj.classId]) { this._skip(a, NOT_EXPORTED[a.obj.classId]); return; }
+    const kind = cls === 'Texture2D' ? 'textures' : cls === 'TextAsset' ? 'text' : cls === 'AudioClip' ? 'audio' : 'assets';
+    if (!this.include[kind]) { this._skip(a, 'turned off in the export settings'); return; }
 
     try {
       if (canExport(cls)) {
@@ -357,6 +361,7 @@ export class ProjectExporter {
     const isBundle = file.sf.objects.some((o) => o.classId === 142);
     const asScene = !isBundle || file.isSceneBundle;
     const label = baseName(file.name);
+    if (!this.include[asScene ? 'scenes' : 'prefabs']) { for (const a of ok) this._skip(a, 'turned off in the export settings'); return; }
 
     if (asScene) {
       const group = `scene:${file.index}`;
