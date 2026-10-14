@@ -18,6 +18,9 @@ const STATIC = {
   '/ui/style.css': { file: 'style.css', type: 'text/css; charset=utf-8' },
   '/ui/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/ui/fonts/KodeMono-VariableFont_wght.ttf': { file: 'fonts/KodeMono-VariableFont_wght.ttf', type: 'font/ttf' },
+  '/ui/img/banner.jpg': { file: 'img/banner.jpg', type: 'image/jpeg' },
+  '/ui/img/banner2.jpg': { file: 'img/banner2.jpg', type: 'image/jpeg' },
+  '/ui/img/pfp.jpg': { file: 'img/pfp.jpg', type: 'image/jpeg' },
 };
 
 const CSP = [

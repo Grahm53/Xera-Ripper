@@ -4,6 +4,7 @@ import http from 'node:http';
 import { mkdtempSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readFileSync as readFile } from 'node:fs';
 import { createApp } from '../src/server.js';
 import { makeGameDir } from './helpers/fixture.js';
 
@@ -60,6 +61,31 @@ test('static files: only the allow-listed UI assets are served', async () => {
     assert.equal((await raw({ path: p })).status, 404, p);
   }
   assert.equal((await fetch(base + '/ui/app.js', { method: 'POST' })).status, 405);
+});
+
+test('credits page: every image the UI references is served as a real, small JPEG (no silent 404s)', async () => {
+  const appJs = readFile(new URL('../ui/app.js', import.meta.url), 'utf8');
+  const wanted = [...new Set([...appJs.matchAll(/\/ui\/img\/[\w.-]+/g)].map((m) => m[0]))];
+  assert.deepEqual(wanted.sort(), ['/ui/img/banner.jpg', '/ui/img/banner2.jpg', '/ui/img/pfp.jpg']);
+  for (const p of wanted) {
+    const r = await fetch(base + p);
+    assert.equal(r.status, 200, p);
+    assert.equal(r.headers.get('content-type'), 'image/jpeg');
+    assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+    const body = Buffer.from(await r.arrayBuffer());
+    assert.deepEqual([...body.subarray(0, 3)], [0xff, 0xd8, 0xff], `${p} is a JPEG`);
+    assert.ok(body.length > 5_000 && body.length < 250_000, `${p} is ${body.length} bytes`);
+  }
+  // other files in the folder are still not reachable
+  assert.equal((await raw({ path: '/ui/img/' })).status, 404);
+  assert.equal((await raw({ path: '/ui/img/../app.js.map' })).status, 404);
+  assert.equal((await raw({ path: '/ui/img/banner.jpg/../../../package.json' })).status, 404);
+});
+
+test('credits page: external links are fixed constants opened safely', () => {
+  const appJs = readFile(new URL('../ui/app.js', import.meta.url), 'utf8');
+  assert.match(appJs, /target: '_blank', rel: 'noopener noreferrer'/);
+  for (const m of appJs.matchAll(/https?:\/\/[^'"`\s)]+/g)) assert.match(m[0], /^https:\/\//, `${m[0]} must be https`);
 });
 
 test('DNS-rebinding guard: a forged Host header is refused everywhere', async () => {

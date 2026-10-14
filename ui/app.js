@@ -7,6 +7,7 @@ const PAGE = 100;
 // ---------------------------------------------------------------- i18n
 const LANGS = {
   en: {
+    'menu.help': 'Help', 'help.credits': 'Credits', 'credits.back': '← Back',
     'menu.file': 'File', 'menu.view': 'View', 'menu.export': 'Export', 'menu.language': 'Language', 'menu.dev': 'Development',
     'file.openFile': 'Open File…', 'file.openFolder': 'Open Folder…', 'file.reset': 'Reset',
     'view.assets': 'Assets', 'view.files': 'Loaded files',
@@ -121,6 +122,9 @@ function menuDefs() {
       { label: t('dev.log'), run: showLog },
       { label: t('dev.skipped'), disabled: !loaded, run: showSkipped },
     ] },
+    { id: 'help', label: t('menu.help'), items: [
+      { label: t('help.credits'), check: state.view === 'credits', run: openCredits },
+    ] },
   ];
 }
 
@@ -198,6 +202,17 @@ async function reset() {
 }
 
 function setView(v) { state.view = v; renderAll(); if (v === 'assets') refreshAssets(); }
+
+function openCredits() {
+  if (state.view !== 'credits') state.prevView = state.view;
+  state.view = 'credits';
+  renderAll();
+  $('#view').focus();
+}
+function closeCredits() {
+  const back = state.prevView && state.prevView !== 'credits' ? state.prevView : state.summary ? 'assets' : 'welcome';
+  setView(back);
+}
 
 async function showLog() {
   try {
@@ -516,11 +531,65 @@ function openProjectExport() {
   });
 }
 
+// ---------------------------------------------------------------- credits page
+// Everything on this page is fixed text and fixed links (nothing from loaded game files is rendered here).
+const OWNER = {
+  name: 'Graham',
+  role: 'Owner · Xera Games LLC',
+  tagline: 'Creating the best games with gorilla movement',
+  links: [
+    ['GitHub · Grahm53', 'https://github.com/Grahm53'],
+    ['Xera-Ripper repository', 'https://github.com/Grahm53/Xera-Ripper'],
+  ],
+};
+const THIRD_PARTY = [
+  ['Kode Mono', 'UI font. SIL Open Font License 1.1.', 'https://fonts.google.com/specimen/Kode+Mono'],
+  ['UnityPy · K0lb3', 'Source of the built-in type-tree database (data/lzma.tpk) and the reference reader used to cross-check this tool. MIT.', 'https://github.com/K0lb3/UnityPy'],
+  ['AssetRipper Tpk', 'The project that generates the type-tree database. See data/NOTICE.md for terms.', 'https://github.com/AssetRipper/Tpk'],
+  ['AssetRipper', 'The tool that inspired the layout and goal of this one. No AssetRipper code is used.', 'https://github.com/AssetRipper/AssetRipper'],
+  ['texture2ddecoder, Pillow, liblz4, PyYAML', 'Used only by the development cross-checks in tools/crosscheck; none of them ship with the app.', null],
+];
+
+function extLink(href, text) {
+  return h('a', { class: 'ext', href, target: '_blank', rel: 'noopener noreferrer' }, text);
+}
+
+function renderCredits(view) {
+  view.append(h('section', { class: 'credits', 'aria-labelledby': 'credits-title' },
+    h('div', { class: 'credits-head' },
+      h('button', { type: 'button', class: 'btn small', onclick: closeCredits }, t('credits.back')),
+      h('h1', { id: 'credits-title' }, 'Credits')),
+
+    h('article', { class: 'profile', 'aria-label': `About ${OWNER.name}` },
+      h('div', { class: 'banner' }, h('img', { src: '/ui/img/banner.jpg', alt: `${OWNER.name}’s profile banner`, width: '1600', height: '467' })),
+      h('div', { class: 'who' },
+        h('img', { class: 'pfp', src: '/ui/img/pfp.jpg', alt: `${OWNER.name}’s profile picture`, width: '400', height: '400' }),
+        h('div', { class: 'whotext' },
+          h('h2', {}, OWNER.name),
+          h('p', { class: 'role' }, OWNER.role),
+          h('p', { class: 'tagline' }, OWNER.tagline),
+          h('p', { class: 'links' }, OWNER.links.map(([text, href]) => extLink(href, text)))))),
+
+    h('div', { class: 'band' },
+      h('img', { src: '/ui/img/banner2.jpg', alt: '', width: '1600', height: '400' }),
+      h('div', { class: 'bandtext' }, h('b', {}, 'Xera Games LLC'), h('span', {}, 'Solo development studio'))),
+
+    h('h2', { class: 'sect' }, 'Xera Ripper'),
+    h('p', { class: 'lead' }, `Version ${state.info?.version ?? ''}. A Unity asset extractor and Unity-project exporter made by Xera Games LLC. `
+      + 'It runs entirely on your own machine and listens on 127.0.0.1 only.'),
+
+    h('h2', { class: 'sect' }, 'Built with help from'),
+    h('ul', { class: 'thanks' }, THIRD_PARTY.map(([name, what, href]) => h('li', {},
+      href ? extLink(href, name) : h('b', {}, name), h('span', {}, what)))),
+    h('p', { class: 'dim' }, `© ${new Date().getFullYear()} Xera Games LLC. All rights reserved.`)));
+}
+
 // ---------------------------------------------------------------- shell
 function renderView() {
   const view = clear($('#view'));
   tableBody = pagerEl = countEl = detailEl = null;
-  if (!state.summary) renderWelcome(view);
+  if (state.view === 'credits') renderCredits(view);
+  else if (!state.summary) renderWelcome(view);
   else if (state.view === 'files') renderFiles(view);
   else renderAssets(view);
 }
@@ -533,7 +602,12 @@ function renderAll() {
   renderView();
 }
 
-$('#logo').addEventListener('click', (e) => { e.preventDefault(); if (state.summary) setView('assets'); });
+$('#logo').addEventListener('click', (e) => {
+  e.preventDefault();
+  if (state.view === 'credits') closeCredits();
+  else if (state.summary) setView('assets');
+});
+$('#footer-credits').addEventListener('click', () => (state.view === 'credits' ? closeCredits() : openCredits()));
 
 (async function boot() {
   try {
