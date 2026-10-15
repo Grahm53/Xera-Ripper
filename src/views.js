@@ -69,7 +69,8 @@ export function scenes(session) {
   return out;
 }
 
-const refPath = (r) => (r && Number(r.m_FileID) === 0 ? String(r.m_PathID) : null);
+const refPath = (r) => (r && typeof r === 'object' && Number(r.m_FileID) === 0 ? String(r.m_PathID) : null);
+const list = (x) => (Array.isArray(x) ? x : []); // a decoded field is not guaranteed to have the shape the class normally has
 
 // GameObject hierarchy of one file: [{ id, name, active, components: [{id, type}], children: [...] }]
 export function sceneTree(session, fileIndex) {
@@ -89,8 +90,8 @@ export function sceneTree(session, fileIndex) {
   for (const a of gos) {
     const v = goValues.get(String(a.pathId));
     const comps = [];
-    for (const c of v?.m_Component ?? []) {
-      const p = refPath(c.component ?? c.second);
+    for (const c of list(v?.m_Component)) {
+      const p = refPath(c?.component ?? c?.second);
       const target = p === null ? null : byPath.get(p);
       if (target) comps.push({ id: target.id, type: target.className });
     }
@@ -107,7 +108,7 @@ export function sceneTree(session, fileIndex) {
     const tp = String(a.pathId);
     owner.set(tp, refPath(v.m_GameObject));
     father.set(tp, refPath(v.m_Father));
-    kids.set(tp, (v.m_Children ?? []).map(refPath).filter((x) => x !== null));
+    kids.set(tp, list(v.m_Children).map(refPath).filter((x) => x !== null));
   }
   const goOfTransform = (tp) => node.get(owner.get(tp) ?? '');
   const placed = new Set();

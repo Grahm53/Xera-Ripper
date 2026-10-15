@@ -52,7 +52,8 @@ export class ZipArchive {
       const extraLen = cd.readUInt16LE(p + 30);
       const commentLen = cd.readUInt16LE(p + 32);
       const localOffset = cd.readUInt32LE(p + 42);
-      const name = cd.toString(flags & 0x800 ? 'utf8' : 'latin1', p + 46, p + 46 + nameLen);
+      // some Windows tools (PowerShell's Compress-Archive, older .NET zippers) write backslash separators; the spec says '/'
+      const name = cd.toString(flags & 0x800 ? 'utf8' : 'latin1', p + 46, p + 46 + nameLen).replaceAll('\\', '/');
       p += 46 + nameLen + extraLen + commentLen;
       if (name.endsWith('/')) continue; // directory entry
       this.entries.push({ name, method, crc, compSize, size: size32, localOffset, encrypted: (flags & 1) !== 0 });

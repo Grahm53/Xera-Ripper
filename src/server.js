@@ -83,11 +83,15 @@ export function browse(rawPath, { platform = process.platform, pathMod = nodePat
   try { names = readdir(p, { withFileTypes: true }); } catch (e) { throw new HttpError(403, `cannot read ${p}: ${e.code ?? e.message}`); }
   const entries = [];
   for (const d of names.slice(0, 5000)) {
-    if (d.isSymbolicLink()) continue;
-    if (d.isDirectory()) entries.push({ name: d.name, type: 'dir' });
-    else if (d.isFile()) {
-      let size = 0;
-      try { size = stat(pathMod.join(p, d.name)).size; } catch { /* unreadable: still list it */ }
+    let kind = d.isDirectory() ? 'dir' : d.isFile() ? 'file' : null;
+    let size = 0;
+    if (d.isSymbolicLink()) {
+      // browsing may follow links (loading does not); the link's target says whether it is a folder or a file, a dangling link is skipped
+      try { const t = stat(pathMod.join(p, d.name)); kind = t.isDirectory() ? 'dir' : t.isFile() ? 'file' : null; size = t.size; } catch { continue; }
+    }
+    if (kind === 'dir') entries.push({ name: d.name, type: 'dir' });
+    else if (kind === 'file') {
+      if (!size) { try { size = stat(pathMod.join(p, d.name)).size; } catch { /* unreadable: still list it */ } }
       entries.push({ name: d.name, type: 'file', size });
     }
   }
@@ -104,6 +108,7 @@ function intParam(v, dflt, min, max) {
 
 // Returns { server, token, start(): Promise<url> }. Nothing listens until start() is called.
 export function createApp({ session = new Session(), token = randomBytes(24).toString('base64url'), defaultOutDir = join(homedir(), 'xera-ripper-out') } = {}) {
+  let notice = null; // shown once by the page when it opens (set by the CLI when the path given on the command line could not be loaded)
   const indexHtml = readAsset('ui/index.html').toString('utf8');
   let port = 0;
 
@@ -122,7 +127,7 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
     const q = url.searchParams;
 
     if (route === 'GET /api/state') {
-      return json(res, 200, { version: VERSION, loaded: session.loaded, summary: session.loaded ? session.summary() : null, defaultOutDir, exportable: EXPORTABLE, home: homedir(), platform: process.platform });
+      return json(res, 200, { version: VERSION, loaded: session.loaded, summary: session.loaded ? session.summary() : null, defaultOutDir, exportable: EXPORTABLE, home: homedir(), platform: process.platform, notice });
     }
     if (route === 'GET /api/browse') return json(res, 200, browse(q.get('path') ?? ''));
     if (route === 'GET /api/log') return json(res, 200, { lines: session.logLines });
@@ -132,8 +137,9 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
       const body = await readJson(req);
       if (typeof body.path !== 'string' || !cleanPath(body.path)) throw new HttpError(400, 'path is required');
       const path = cleanPath(body.path);
+      // session.load() is all-or-nothing: on failure whatever was loaded before is still loaded, so the page and the server stay in step
       try { return json(res, 200, session.load(path)); }
-      catch (e) { session.reset(); throw new HttpError(400, e.code === 'ENOENT' ? `no such file or folder: ${path}` : e.message); }
+      catch (e) { throw new HttpError(400, e.code === 'ENOENT' ? `no such file or folder: ${path}` : e.code === 'EACCES' || e.code === 'EPERM' ? `not allowed to read ${path}` : e.message); }
     }
 
     if (route === 'GET /api/assets') {
@@ -227,13 +233,15 @@ export function createApp({ session = new Session(), token = randomBytes(24).toS
     } catch (e) {
       const status = e instanceof HttpError ? e.status : 500;
       if (status === 500) session.log(`internal error: ${e.stack ?? e}`);
-      if (req.url?.startsWith('/api/')) json(res, status, { error: status === 500 ? 'internal error' : e.message });
-      else send(res, status, status === 500 ? 'internal error' : e.message, 'text/plain; charset=utf-8');
+      const shown = e instanceof HttpError ? e.message : 'internal error'; // an HttpError carries a message written for the user; anything else may leak internals
+      if (req.url?.startsWith('/api/')) json(res, status, { error: shown });
+      else send(res, status, shown, 'text/plain; charset=utf-8');
     }
   });
 
   return {
     server, session, token,
+    setNotice(msg) { notice = String(msg); },
     start({ port: want = 8765 } = {}) {
       return new Promise((ok, fail) => {
         server.once('error', fail);

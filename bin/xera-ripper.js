@@ -59,9 +59,11 @@ function die(msg) { throw new Fatal(msg); }
 function load(path) {
   if (!path) die(`"${cmd}" needs a <path>`);
   const s = new Session();
-  try { s.load(path); } catch (e) { die(e.code === 'ENOENT' ? `no such file or folder: ${path}` : e.message); }
+  try { s.load(path); } catch (e) {
+    for (const x of e.skipped ?? []) process.stderr.write(`skipped ${x.name}: ${x.reason}\n`);
+    die(e.code === 'ENOENT' ? `no such file or folder: ${path}` : e.message);
+  }
   for (const x of s.skipped) process.stderr.write(`skipped ${x.name}: ${x.reason}\n`);
-  if (!s.loaded) die('no Unity serialized files or bundles found');
   return s;
 }
 
@@ -69,21 +71,29 @@ async function main() {
 switch (cmd) {
   case 'serve': {
     const app = createApp({ defaultOutDir: join(homedir(), 'xera-ripper-out') });
+    let loadError = null;
     if (target) {
-      try { app.session.load(target); } catch (e) { die(e.message); }
+      try { app.session.load(target); } catch (e) {
+        // `serve <path>` typed by hand is a mistake worth stopping for; a file dropped on the .exe should still open the page, which then says why it is empty
+        if (!resolved.dropped) die(e.code === 'ENOENT' ? `no such file or folder: ${target}` : e.message);
+        loadError = `Could not open ${target}: ${e.message}`;
+        app.setNotice(loadError);
+      }
     }
     const port = o.port === undefined ? 8765 : Number(o.port);
     if (!Number.isInteger(port) || port < 0 || port > 65535) die('invalid --port');
     // default port first; if it is taken (e.g. a second copy is open) fall back to any free one
     const started = await app.start({ port }).catch(async (e) => {
-      if (e.code === 'EADDRINUSE' && o.port === undefined) return app.start({ port: 0 });
-      return die(e.code === 'EADDRINUSE' ? `port ${port} is in use (try --port 0 for a free one)` : e.message);
+      // 8765 can also be refused outright (EACCES: Windows reserves some port ranges for Hyper-V/WSL); either way take any free port
+      if ((e.code === 'EADDRINUSE' || e.code === 'EACCES') && o.port === undefined) return app.start({ port: 0 });
+      return die(e.code === 'EADDRINUSE' ? `port ${port} is in use (try --port 0 for a free one)` : e.code === 'EACCES' ? `not allowed to use port ${port} (try --port 0 for a free one)` : e.message);
     });
     const { url } = started;
     const open = shouldOpenBrowser({ autoOpen: resolved.autoOpen, open: o.open, noOpen: o['no-open'] });
     process.stdout.write(`\n  =(X)=  Xera Ripper ${VERSION}\n\n  Your browser should open by itself. If it does not, open this link:\n  ${url}\n\n`
       + `  (listens on 127.0.0.1 only; the link carries a one-time access token)\n  ${isSea ? 'Close this window to stop Xera Ripper.' : 'Ctrl+C to stop.'}\n\n`);
-    if (resolved.dropped && target) process.stdout.write(`  Loaded: ${target}\n${resolved.extra?.length ? `  (only the first of ${1 + resolved.extra.length} dropped items was loaded)\n` : ''}\n`);
+    if (loadError) process.stdout.write(`  ${loadError}\n\n`);
+    else if (resolved.dropped && target) process.stdout.write(`  Loaded: ${target}\n${resolved.extra?.length ? `  (only the first of ${1 + resolved.extra.length} dropped items was loaded)\n` : ''}\n`);
     if (open) openBrowser(url);
     process.on('SIGINT', () => app.stop().then(() => process.exit(0)));
     break;

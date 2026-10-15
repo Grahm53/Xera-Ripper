@@ -25,6 +25,7 @@ node bin/xera-ripper.js project <game> -o /tmp/proj && /tmp/xv/bin/python tools/
 # 6. the web UI: every menu item is reachable with a REAL mouse at 11 window widths (needs Playwright + Chromium)
 node tools/crosscheck/ui_menus.mjs "$(npm root -g)"
 node tools/crosscheck/ui_views.mjs "$(npm root -g)"   # every tab/view (assets tabs, collections, bundles, scenes tree, export settings, Windows-style file dialog), real mouse, 11 widths
+node tools/crosscheck/ui_regress.mjs "$(npm root -g)"   # regressions an independent review found (failed load, double-click, keyboard, focus trap, paging, byte-exact download, narrow screens)
 ```
 
 Why check 6 exists: the menu bar once clipped every dropdown (`overflow-x: auto`), and Playwright's own `click()` scrolls hidden containers

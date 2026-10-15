@@ -225,12 +225,13 @@ for (const [w, hgt] of WIDTHS.filter(([x]) => !process.env.ONLY || String(x) ===
   await winCheck('starts in the Windows home folder', (await page.$eval('.modal input[aria-label=Path]', (e) => e.value)) === 'C:\\Users\\Graham');
   await winCheck('shows a This PC button on Windows', !!(await page.$('.modal .row button:text-is("This PC")')));
   const labels = () => page.$$eval('.browser-list button', (e) => e.map((x) => x.textContent));
-  const clickLabel = async (text) => { // real mouse on the list entry whose label starts with `text`
+  const clickLabel = async (text) => { // real mouse on the list entry whose label contains `text`
+    await page.waitForTimeout(350); // a person needs longer than the dialog's double-click guard (300 ms) to aim at the next entry
     const pt = await page.evaluate((t) => { const el = [...document.querySelectorAll('.browser-list button')].find((x) => x.textContent.includes(t)); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + 20, r.y + r.height / 2); return hit === el || el.contains(hit) ? { x: r.x + 20, y: r.y + r.height / 2 } : null; }, text);
     if (!pt) { problems.push(`windows dialog: cannot click "${text}"`); return false; }
     await page.mouse.click(pt.x, pt.y); await page.waitForTimeout(200); return true;
   };
-  await page.click('.modal .row button:text-is("This PC")');
+  await page.click('#browser-drives');
   await page.waitForFunction(() => [...document.querySelectorAll('.browser-list button')].some((x) => x.textContent.includes('D:')));
   const drives = await labels();
   await winCheck('lists the drives', drives.some((x) => x.includes('C:')) && drives.some((x) => x.includes('D:')), drives.join('|'));
@@ -246,7 +247,7 @@ for (const [w, hgt] of WIDTHS.filter(([x]) => !process.env.ONLY || String(x) ===
   await page.keyboard.press('Escape');
   await page.click('.welcome .actions .btn:not(.primary)'); // Open Folder...
   await page.waitForSelector('.modal');
-  await page.click('.modal .row button:text-is("This PC")');
+  await page.click('#browser-drives');
   await page.waitForFunction(() => [...document.querySelectorAll('.browser-list button')].some((x) => x.textContent.includes('D:')));
   await winCheck('"Open this folder" is disabled on the drive list', await page.$eval('#browser-confirm', (e) => e.disabled));
   await clickLabel('D:');

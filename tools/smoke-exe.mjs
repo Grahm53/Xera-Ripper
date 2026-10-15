@@ -81,12 +81,33 @@ try {
   check('  hex view returns bytes', hex.total > 0 && Buffer.from(hex.data, 'base64').length === hex.length && hex.length > 0);
   const yaml = await (await get(`/api/asset/${go.id}/yaml`, tok)).text();
   check('  Unity YAML view of a GameObject', yaml.startsWith('%YAML 1.1\n%TAG !u!') && /--- !u!1 &\d+\nGameObject:/.test(yaml), yaml.slice(0, 80));
+  // a failed Open leaves the loaded game alone and says why
+  const emptyDir = mkdtempSync(join(tmpdir(), 'xera-empty-'));
+  const bad = await fetch(`${u.origin}/api/load`, { method: 'POST', headers: { ...tok, 'content-type': 'application/json' }, body: JSON.stringify({ path: emptyDir }) });
+  const badBody = await bad.json();
+  check('  opening an empty folder is refused with the reason', bad.status === 400 && /No Unity files were found/.test(badBody.error), JSON.stringify(badBody));
+  const after = await getJson('/api/state');
+  check('  ...and the loaded game is still loaded', after.loaded && after.summary.assetCount === 15, JSON.stringify(after.summary?.assetCount));
   const quoted = await getJson(`/api/browse?path=${encodeURIComponent(`"${game}"`)}`);
   check('  a path pasted with quotes is accepted', quoted.path === game || quoted.path.endsWith(game.replace(/^.*[\\/]/, '')), quoted.path);
 } catch (e) {
   check('web UI started and answered', false, e.message);
 } finally {
   ui.child.kill();
+}
+
+// 4. a folder dropped on the program that holds nothing Unity: the page still opens and says why (no fake "Loaded:")
+const ui2 = startUi([mkdtempSync(join(tmpdir(), 'xera-nothing-')), '--no-open', '--port', '0']);
+try {
+  const url2 = await ui2.url;
+  const u2 = new URL(url2);
+  const st2 = await (await fetch(`${u2.origin}/api/state`, { headers: { 'X-Xera-Token': u2.searchParams.get('t') } })).json();
+  check('dropped non-Unity folder: starts with nothing loaded and a notice', !st2.loaded && /No Unity files were found/.test(st2.notice ?? ''), JSON.stringify(st2.notice));
+  check('  the console says it could not open it (not "Loaded:")', /Could not open/.test(ui2.output()) && !/Loaded: /.test(ui2.output()), ui2.output());
+} catch (e) {
+  check('dropped non-Unity folder starts the UI', false, e.message);
+} finally {
+  ui2.child.kill();
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nall smoke checks passed');

@@ -35,7 +35,8 @@ export function formatDouble(x) {
 }
 
 const RESERVED = /^(true|false|yes|no|on|off|null|~|y|n)$/i;
-const NUMBERISH = /^[+-]?(\d[\d_]*\.?\d*|\.\d+)([eE][+-]?\d+)?$|^0[xob][0-9a-f]+$|^[+-]?\.(inf|nan)$/i;
+// Written so no two parts can match the same characters (the old `\d[\d_]*\.?\d*` backtracked quadratically: a 60,000-digit string took 7 s).
+const NUMBERISH = /^[+-]?(\d[\d_]*(\.[\d_]*)?|\.\d[\d_]*)([eE][+-]?\d+)?$|^0[xob][0-9a-f]+$|^[+-]?\.(inf|nan)$/i;
 
 export function yamlString(s) {
   if (s === '') return "''";

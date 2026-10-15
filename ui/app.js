@@ -133,15 +133,43 @@ function toast(msg, kind = 'info') {
   const el = h('div', { class: `toast ${kind}`, role: kind === 'error' ? 'alert' : 'status' }, msg);
   const remove = () => el.remove();
   el.addEventListener('click', remove);
-  $('#overlay-root').append(el);
+  $('#toasts').append(el); // a column of their own: several at once stack instead of drawing on top of each other
+  while ($('#toasts').children.length > 4) $('#toasts').firstChild.remove();
   setTimeout(remove, kind === 'error' ? 9000 : 4500);
 }
 
+const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])';
+const modalStack = [];
+let menuReturn = null; // the menu button whose item opened the next dialog (the item itself is gone by then)
+const BACKGROUND = ['header.bar', '#tabs', '#view', 'footer.foot'];
+function setBackgroundInert(on) { for (const sel of BACKGROUND) { const el = $(sel); if (el) el.inert = on; } } // nothing behind a dialog can be reached by Tab or a screen reader
+
 function openModal({ title, body, actions = [], wide = false }) {
   const root = $('#overlay-root');
-  const prevFocus = document.activeElement;
-  const close = () => { backdrop.remove(); document.removeEventListener('keydown', onKey, true); prevFocus?.focus?.(); };
-  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  const prevFocus = document.activeElement && document.activeElement !== document.body ? document.activeElement : menuReturn;
+  menuReturn = null;
+  const entry = {};
+  const close = () => {
+    const at = modalStack.indexOf(entry);
+    if (at < 0) return; // already closed
+    modalStack.splice(at, 1);
+    backdrop.remove();
+    document.removeEventListener('keydown', onKey, true);
+    if (!modalStack.length) setBackgroundInert(false);
+    // back to where the user was; if that element is gone (a menu item that closed with its menu) land on the page itself, never on <body>
+    if (prevFocus?.isConnected) prevFocus.focus?.(); else $('#view').focus({ preventScroll: true });
+  };
+  const onKey = (e) => {
+    if (modalStack.at(-1) !== entry) return; // only the top-most dialog reacts
+    if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); return; }
+    if (e.key !== 'Tab') return;
+    const items = [...modal.querySelectorAll(FOCUSABLE)].filter((x) => x.getClientRects().length);
+    if (!items.length) return;
+    const first = items[0]; const last = items.at(-1);
+    if (!modal.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
   const modal = h('div', { class: wide ? 'modal wide' : 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': title, },
     h('header', {}, h('h2', {}, title), h('button', { class: 'x', 'aria-label': t('common.close'), onclick: close }, '×')),
     h('div', { class: 'body' }, body),
@@ -150,6 +178,8 @@ function openModal({ title, body, actions = [], wide = false }) {
       onclick: () => a.run?.({ close }) ?? (a.close !== false && close()),
     }, a.label))));
   const backdrop = h('div', { class: 'backdrop', onmousedown: (e) => { if (e.target === backdrop) close(); } }, modal);
+  modalStack.push(entry);
+  setBackgroundInert(true);
   root.append(backdrop);
   document.addEventListener('keydown', onKey, true);
   (modal.querySelector('input, select') ?? modal.querySelector('.btn.primary') ?? modal.querySelector('.x')).focus();
@@ -206,31 +236,67 @@ function closeMenus() {
   document.querySelectorAll('.menu.open').forEach((m) => { m.classList.remove('open'); m.querySelector('.dropdown')?.remove(); m.querySelector('button').setAttribute('aria-expanded', 'false'); });
 }
 
+const enabledItems = (dropdown) => [...dropdown.querySelectorAll('button:not(:disabled)')];
+
 function renderMenu() {
   const reopen = openMenu; // a background update (an asset finished loading) must not slam a dropdown shut under the pointer
+  // ...and must not throw away keyboard focus that was inside the menu bar: remember where it was
+  const active = document.activeElement;
+  let focusSpec = null;
+  if (active && $('#menubar').contains(active)) {
+    const wrapEl = active.closest('.menu');
+    focusSpec = { id: wrapEl?.firstChild.id, index: [...(wrapEl?.querySelectorAll('.dropdown button') ?? [])].indexOf(active) }; // -1: the top-level button itself
+  }
   openMenu = null;
   const openers = {};
+  const defs = menuDefs();
   const bar = clear($('#menubar'));
-  for (const def of menuDefs()) {
+  defs.forEach((def, di) => {
     const wrap = h('div', { class: 'menu', role: 'none' });
     const btn = h('button', { role: 'menuitem', 'aria-haspopup': 'true', 'aria-expanded': 'false', id: `menu-${def.id}` }, def.label);
-    const open = () => {
+    const open = (focusFirst = false) => {
       closeMenus();
       openMenu = def.id;
       wrap.classList.add('open');
       btn.setAttribute('aria-expanded', 'true');
-      wrap.append(h('div', { class: 'dropdown', role: 'menu', 'aria-labelledby': btn.id }, def.items.map((it) => (it.sep ? h('hr') : h('button', {
+      const dd = h('div', { class: 'dropdown', role: 'menu', 'aria-labelledby': btn.id }, def.items.map((it) => (it.sep ? h('hr') : h('button', {
         role: it.check !== undefined ? 'menuitemcheckbox' : 'menuitem', 'aria-checked': it.check !== undefined ? String(!!it.check) : null, disabled: it.disabled,
-        onclick: () => { closeMenus(); it.run(); },
-      }, h('span', { class: 'check', 'aria-hidden': 'true' }, it.check ? '✓' : ''), it.label)))));
+        onclick: () => { menuReturn = btn; closeMenus(); it.run(); },
+      }, h('span', { class: 'check', 'aria-hidden': 'true' }, it.check ? '✓' : ''), it.label))));
+      dd.addEventListener('keydown', (e) => {
+        const items = enabledItems(dd);
+        const at = items.indexOf(document.activeElement);
+        const move = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: items.length - 1 }[e.key];
+        if (move !== undefined && items.length) { e.preventDefault(); items[(move + items.length) % items.length].focus(); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenus(); btn.focus(); }
+        else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); openers[defs[(di + (e.key === 'ArrowRight' ? 1 : -1) + defs.length) % defs.length].id](true); }
+        else if (e.key === 'Tab') closeMenus(); // leaving the menu with Tab closes it; focus continues from the button
+      });
+      wrap.append(dd);
+      if (focusFirst) enabledItems(dd)[0]?.focus();
     };
-    btn.addEventListener('click', (e) => { e.stopPropagation(); openMenu === def.id ? closeMenus() : open(); });
-    btn.addEventListener('mouseenter', () => { if (openMenu && openMenu !== def.id) open(); });
     openers[def.id] = open;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); if (openMenu === def.id) closeMenus(); else open(e.detail === 0); }); // detail 0 = Enter/Space: move into the menu
+    btn.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse' && openMenu && openMenu !== def.id) open(); }); // hover-switching is for a mouse; on touch it fired before the tap and closed the menu
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); open(true); }
+      else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const next = defs[(di + (e.key === 'ArrowRight' ? 1 : -1) + defs.length) % defs.length].id;
+        if (openMenu) openers[next](); // a menu is open: slide to the neighbour's menu
+        $(`#menu-${next}`).focus();
+      } else if (e.key === 'Escape') closeMenus();
+    });
+    wrap.addEventListener('focusout', (e) => { if (e.relatedTarget && !wrap.contains(e.relatedTarget) && openMenu === def.id) closeMenus(); });
     wrap.append(btn);
     bar.append(wrap);
-  }
+  });
   if (reopen) openers[reopen]?.();
+  if (focusSpec?.id) {
+    const btnEl = $(`#${focusSpec.id}`);
+    const items = btnEl ? [...btnEl.parentElement.querySelectorAll('.dropdown button')] : [];
+    (focusSpec.index >= 0 && items[focusSpec.index] ? items[focusSpec.index] : btnEl)?.focus();
+  }
 }
 document.addEventListener('click', closeMenus);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenus(); });
@@ -307,7 +373,8 @@ function showSkipped() {
   openModal({
     title: `${t('dev.skipped')} (${s.skippedCount})`, wide: true,
     body: s.skipped.length
-      ? h('div', { class: 'problems' }, s.skipped.map((x) => h('div', {}, h('span', { class: 'note' }, x.name), ' — ', x.reason)))
+      ? h('div', { class: 'problems' }, s.skipped.map((x) => h('div', {}, h('span', { class: 'note' }, x.name), ' — ', x.reason)),
+        s.skippedCount > s.skipped.length ? h('div', { class: 'dim' }, `…and ${fmtNum(s.skippedCount - s.skipped.length)} more not shown`) : null)
       : h('p', {}, 'Nothing was skipped.'),
     actions: [{ label: t('common.close') }],
   });
@@ -322,18 +389,24 @@ async function openBrowser(mode) {
   const listEl = h('div', { class: 'browser-list', role: 'listbox', 'aria-label': 'Files and folders' });
   const pathInput = h('input', { type: 'text', 'aria-label': 'Path', spellcheck: 'false', autocomplete: 'off' });
   let cur = null;
-  let chosen = null;
+  let chosen = null; // a file picked in the list (file mode)
+  let lastRender = 0; // when the list was last replaced: a double-click's second click must not land on the NEW list
   let dlg;
 
   const confirmBtnId = 'browser-confirm';
+  // What "Open" would open: whatever is in the path box (typed, pasted or filled in by clicking), so a typed path is never ignored.
+  const target = () => pathInput.value.trim() || (mode === 'folder' ? cur : null);
   const updateConfirm = () => {
     const b = document.getElementById(confirmBtnId);
-    if (b) b.disabled = mode === 'file' ? !chosen : !cur || cur === DRIVES;
+    if (!b) return;
+    const t = target();
+    b.disabled = !t || t === DRIVES || (mode === 'file' && !chosen && t === cur);
   };
   // "C:\" already ends with a separator; "drives:" lists whole drives, whose names are complete paths
   const join = (r, name) => (r.drives ? name : r.path + (r.path.endsWith(r.sep) ? '' : r.sep) + name);
+  const recent = () => Date.now() - lastRender < 300;
 
-  async function browseTo(path) {
+  async function browseTo(path, quiet = false) {
     try {
       const r = await apiJson(`/api/browse?path=${encodeURIComponent(path ?? '')}`);
       cur = r.path; if (!r.drives) state.lastDir = r.path;
@@ -344,41 +417,52 @@ async function openBrowser(mode) {
       if (r.parent) listEl.append(h('button', { onclick: () => browseTo(r.parent) }, r.parent === DRIVES ? '↑ This PC (all drives)' : '↑ ..'));
       for (const e of r.entries) {
         const full = join(r, e.name);
+        const isDir = e.type === 'dir';
         const btn = h('button', {
           role: 'option', 'aria-selected': String(chosen === full), class: chosen === full ? 'sel' : null,
+          disabled: !isDir && mode === 'folder', // in folder mode files are only shown for orientation
           onclick: () => {
-            if (e.type === 'dir') return browseTo(full);
+            if (recent()) return; // the second click of a double-click on a folder
+            if (isDir) return browseTo(full);
             chosen = full; pathInput.value = full;
             listEl.querySelectorAll('.sel').forEach((n) => { n.classList.remove('sel'); n.setAttribute('aria-selected', 'false'); });
             btn.classList.add('sel'); btn.setAttribute('aria-selected', 'true'); updateConfirm();
           },
-          ondblclick: () => { if (e.type === 'file' && mode === 'file') { dlg.close(); loadPath(full); } },
-        }, e.type === 'dir' ? '▸' : '·', e.name, e.type === 'file' ? h('span', { class: 'sz' }, fmtSize(e.size)) : null);
+          ondblclick: () => { if (!recent() && !isDir && mode === 'file') { dlg.close(); loadPath(full); } },
+        }, isDir ? '▸' : '·', e.name, e.type === 'file' ? h('span', { class: 'sz' }, fmtSize(e.size)) : null);
         listEl.append(btn);
       }
       if (!r.entries.length) listEl.append(h('div', { class: 'empty' }, r.drives ? 'No drives found' : 'Empty folder'));
       if (r.truncated) listEl.append(h('div', { class: 'note pad' }, 'Listing truncated; type the exact path above.'));
+      lastRender = Date.now();
       updateConfirm();
-    } catch (e) { toast(e.message, 'error'); }
+      return true;
+    } catch (e) { if (!quiet) toast(e.message, 'error'); return false; }
   }
 
   const body = [
-    h('div', { class: 'field' }, h('span', {}, mode === 'file' ? 'Pick a bundle, serialized file or .apk' : 'Pick a folder (e.g. YourGame_Data)'),
+    h('div', { class: 'field' }, h('span', {}, mode === 'file' ? 'Pick a bundle, serialized file or .apk' : 'Pick a folder (e.g. YourGame_Data), or paste its path'),
       h('div', { class: 'row' }, pathInput,
-        state.info.platform === 'win32' ? h('button', { class: 'btn', onclick: () => browseTo(DRIVES) }, 'This PC') : null,
-        h('button', { class: 'btn', onclick: () => browseTo(pathInput.value) }, 'Go'))),
+        state.info.platform === 'win32' ? h('button', { class: 'btn', id: 'browser-drives', onclick: () => browseTo(DRIVES) }, 'This PC') : null,
+        h('button', { class: 'btn', id: 'browser-go', onclick: () => browseTo(pathInput.value) }, 'Go'))),
     listEl,
   ];
   pathInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') browseTo(pathInput.value); });
+  pathInput.addEventListener('input', () => { chosen = null; updateConfirm(); }); // typing replaces whatever was picked
   dlg = openModal({
     title: mode === 'file' ? t('file.openFile') : t('file.openFolder'), wide: true, body,
     actions: [
       { label: t('common.cancel') },
       { label: mode === 'file' ? 'Open selected file' : 'Open this folder', primary: true, id: confirmBtnId, disabled: true, close: false,
-        run: ({ close }) => { const target = mode === 'file' ? chosen : cur; if (target && target !== DRIVES) { close(); loadPath(target); } } },
+        run: ({ close }) => { const tgt = target(); if (tgt && tgt !== DRIVES) { close(); loadPath(tgt); } } },
     ],
   });
-  await browseTo(state.lastDir ?? state.info.home);
+  // start where the user last was; if that folder is gone fall back to the home folder, then to the top level
+  for (const start of [state.lastDir, state.info.home, '']) {
+    if (start == null) continue;
+    if (await browseTo(start, true)) return;
+  }
+  toast('Could not list any folder. Type a path above and press Go.', 'error');
 }
 
 // ---------------------------------------------------------------- Home / welcome
@@ -496,7 +580,7 @@ async function refreshAssets(p) {
     clear(ui.tbody);
     for (const row of r.rows) {
       const href = assetsHash({ sel: row.id });
-      const open = (e) => { if (plain(e)) { e.preventDefault(); setAssets({ sel: row.id }); } };
+      const open = (e) => { if (plain(e)) { e.preventDefault(); state.pickedByUser = true; setAssets({ sel: row.id }); } };
       const tr = h('tr', { onclick: (e) => { if (!e.target.closest('a')) open(e); } },
         h('td', { title: row.name }, h('a', { class: 'rowlink', href, onclick: open }, row.name || h('span', { class: 'noname' }, '(unnamed)'))),
         h('td', { class: `type${row.exportable ? ' can' : ''}` }, row.type),
@@ -508,10 +592,13 @@ async function refreshAssets(p) {
     if (!r.rows.length) ui.tbody.append(h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'No assets match.')));
     const pages = Math.max(1, Math.ceil(r.total / PAGE));
     ui.count.textContent = `${fmtNum(r.total)} match${r.total === 1 ? '' : 'es'}`;
+    const pagerFocus = ui.pager.contains(document.activeElement) ? document.activeElement.dataset.pg : null;
     clear(ui.pager).append(
-      h('button', { class: 'btn small', disabled: p.page === 0, onclick: () => setAssets({ page: p.page - 1 }, { replace: true }) }, '‹ Prev'),
+      h('button', { class: 'btn small', 'data-pg': 'prev', disabled: p.page === 0, onclick: () => setAssets({ page: p.page - 1 }, { replace: true }) }, '‹ Prev'),
       `page ${p.page + 1} / ${pages}`,
-      h('button', { class: 'btn small', disabled: p.page + 1 >= pages, onclick: () => setAssets({ page: p.page + 1 }, { replace: true }) }, 'Next ›'));
+      h('button', { class: 'btn small', 'data-pg': 'next', disabled: p.page + 1 >= pages, onclick: () => setAssets({ page: p.page + 1 }, { replace: true }) }, 'Next ›'));
+    if (pagerFocus) (ui.pager.querySelector(`[data-pg="${pagerFocus}"]:not(:disabled)`) ?? ui.pager.querySelector('button:not(:disabled)'))?.focus();
+    ui.tbody.closest('.tablescroll').scrollTop = 0; // a new page starts at its first row, not wherever the last one was scrolled to
     markSelected();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -551,6 +638,8 @@ async function showDetail(p) {
     state.detail = { id: p.sel, d, preview: null, hexOffset: 0 };
     state.selectedExportable = d.exportable;
     renderMenu();
+    if (matchMedia('(max-width: 960px)').matches && state.pickedByUser) { ui.detail.scrollIntoView({ block: 'start' }); } // one column: the pane is far below the list
+    state.pickedByUser = false;
     const tabs = h('div', { class: 'dtabs', role: 'tablist', 'aria-label': 'Asset views' }, DETAIL_TABS.map((name) => h('button', {
       type: 'button', role: 'tab', id: `dtab-${name}`, 'data-tab': name, 'aria-controls': 'dpanel',
       onclick: () => setAssets({ tab: name }, { replace: true }),
@@ -566,6 +655,7 @@ async function showDetail(p) {
     }, DETAIL_LABEL[name])));
     ui.panel = h('div', { class: 'dpanel', id: 'dpanel', role: 'tabpanel', tabindex: '0' });
     clear(ui.detail).append(
+      h('button', { type: 'button', class: 'btn small back-to-list', onclick: () => ui.tbody.closest('.tablewrap').scrollIntoView({ block: 'start' }) }, '↑ Back to the list'),
       h('h2', {}, d.name || `${d.type} #${d.pathId}`),
       h('p', { class: 'dsub' }, `${d.type} · path ID ${d.pathId}`),
       tabs, ui.panel);
@@ -616,41 +706,40 @@ function renderOverview(panel, dt, my) {
   dt.preview.then((pv) => {
     if (my !== state.tabSeq) return;
     clear(preview);
-    if (pv.blob) {
-      revokePreview();
-      state.objectUrl = URL.createObjectURL(pv.blob);
-      if (pv.mime.startsWith('image/')) {
-        preview.classList.add('checker');
-        const img = h('img', { src: state.objectUrl, alt: 'texture preview' });
-        // Small textures are shown magnified (nearest-neighbour) so they are actually visible; the real size is stated underneath.
-        img.addEventListener('load', () => {
-          const longest = Math.max(img.naturalWidth, img.naturalHeight, 1);
-          const scale = Math.max(1, Math.min(16, Math.floor(256 / longest)));
-          img.style.width = `${img.naturalWidth * scale}px`;
-          preview.append(h('div', { class: 'dim' }, `${img.naturalWidth} × ${img.naturalHeight}px${scale > 1 ? ` (shown ${scale}×)` : ''}`));
-        });
-        preview.append(img);
-      } else preview.append(h('audio', { controls: true, src: state.objectUrl }));
-      actions.append(h('a', { class: 'btn small', href: state.objectUrl, download: downloadName(d, pv.mime) }, 'Download'));
-    } else if (pv.text !== undefined) {
+    revokePreview();
+    state.objectUrl = URL.createObjectURL(pv.blob);
+    if (pv.kind === 'image') {
+      preview.classList.add('checker');
+      const img = h('img', { src: state.objectUrl, alt: 'texture preview' });
+      // Small textures are shown magnified (nearest-neighbour) so they are actually visible; the real size is stated underneath.
+      img.addEventListener('load', () => {
+        const longest = Math.max(img.naturalWidth, img.naturalHeight, 1);
+        const scale = Math.max(1, Math.min(16, Math.floor(256 / longest)));
+        img.style.width = `${img.naturalWidth * scale}px`;
+        img.style.height = `${img.naturalHeight * scale}px`;
+        preview.append(h('div', { class: 'dim' }, `${img.naturalWidth} × ${img.naturalHeight}px${scale > 1 ? ` (shown ${scale}×)` : ''}`));
+      });
+      preview.append(img);
+    } else if (pv.kind === 'audio') {
+      preview.append(h('audio', { controls: true, src: state.objectUrl }));
+    } else if (pv.kind === 'text') {
       let text = pv.text;
       if (pv.mime.includes('json')) { try { text = JSON.stringify(JSON.parse(text), null, 2); } catch { /* show raw */ } }
       preview.append(h('pre', {}, text.length > 60000 ? `${text.slice(0, 60000)}\n… (truncated)` : text));
-      const url = URL.createObjectURL(new Blob([pv.text], { type: pv.mime }));
-      state.objectUrl = url;
-      actions.append(h('a', { class: 'btn small', href: url, download: downloadName(d, pv.mime) }, 'Download'));
     } else {
-      preview.append(h('span', { class: 'noname' }, `Binary data (${fmtSize(pv.bytes)}), no inline preview. See the Hex tab.`));
+      preview.append(h('span', { class: 'noname' }, `Binary data (${fmtSize(pv.blob.size)}), no inline preview. See the Hex tab.`));
     }
+    actions.append(h('a', { class: 'btn small', href: state.objectUrl, download: downloadName(d, pv.mime) }, 'Download'));
   }, (e) => { if (my === state.tabSeq) clear(preview).append(h('span', { class: 'note' }, e.message)); });
 }
 
 async function fetchPreview(id) {
   const res = await api(`/api/asset/${id}/preview`);
   const mime = (res.headers.get('content-type') ?? '').split(';')[0].trim();
-  if (mime.startsWith('image/') || mime.startsWith('audio/')) return { mime, blob: await res.blob() };
-  if (mime.startsWith('text/') || mime.includes('json')) return { mime, text: await res.text() };
-  return { mime, bytes: (await res.arrayBuffer()).byteLength };
+  const blob = await res.blob(); // the exact bytes: Download must hand back what is in the game, not a decoded-and-re-encoded copy
+  if (mime.startsWith('image/') || mime.startsWith('audio/')) return { mime, blob, kind: mime.startsWith('image/') ? 'image' : 'audio' };
+  if (mime.startsWith('text/') || mime.includes('json')) return { mime, blob, kind: 'text', text: await blob.text() };
+  return { mime, blob, kind: 'binary' };
 }
 
 function renderData(panel, dt) {
@@ -900,7 +989,7 @@ function openExport(scope) {
   const out = h('input', { type: 'text', value: state.info.defaultOutDir, spellcheck: 'false', 'aria-label': 'Output folder' });
   const scopeSel = h('select', { 'aria-label': 'Scope' },
     h('option', { value: 'all', selected: scope === 'all' }, 'All assets'),
-    h('option', { value: 'filter', selected: scope === 'filter' }, `Current filter (${fmtNum(state.total)} match${state.total === 1 ? '' : 'es'})`),
+    h('option', { value: 'filter', selected: scope === 'filter' }, `Current filter (${fmtNum(state.total)} object${state.total === 1 ? '' : 's'}; only the ticked asset types are written)`),
     state.selected != null ? h('option', { value: 'selected', selected: scope === 'selected' }, 'Selected asset only') : null);
   const result = h('div', { 'aria-live': 'polite' });
   let running = false;
@@ -917,7 +1006,9 @@ function openExport(scope) {
       const r = await setBusy(t('status.exporting'), () => apiJson('/api/export', { method: 'POST', body }));
       clear(result).append(
         h('div', { class: 'stats' }, [['written', r.written], ['raw', r.raw], ['no type tree', r.noTypeTree], ['failed', r.failed]].map(([l, n]) => h('div', { class: 'stat' }, h('b', {}, fmtNum(n)), h('span', {}, l)))),
-        h('p', {}, 'Saved to ', h('span', { class: 'okc' }, r.outDir)),
+        r.written + r.raw > 0
+          ? h('p', {}, `Saved ${fmtNum(r.written + r.raw)} file${r.written + r.raw === 1 ? '' : 's'} to `, h('span', { class: 'okc' }, r.outDir))
+          : h('p', { class: 'note' }, `Nothing was written to ${r.outDir}.${r.failed ? ` ${fmtNum(r.failed)} failed (details below).` : ' Nothing matched the chosen scope and asset types.'}`),
         r.problemCount ? h('div', { class: 'problems', tabindex: '0' }, r.problems.map((p) => h('div', {}, h('span', { class: p.status === 'failed' ? 'err' : 'note' }, `${p.status} `), `${p.type} ${p.name || ''}: ${p.note ?? ''}`))) : null);
     } catch (e) { clear(result).append(h('p', { class: 'err' }, e.message)); }
     running = false;
@@ -976,7 +1067,9 @@ function openProjectExport() {
       clear(result).append(
         h('div', { class: 'stats' }, [['textures', r.textures], ['scenes', r.scenes], ['prefabs', r.prefabs], ['other assets', r.yamlAssets], ['text', r.text], ['audio', r.audio]]
           .map(([l, n]) => h('div', { class: 'stat' }, h('b', {}, fmtNum(n)), h('span', {}, l)))),
-        h('p', {}, 'Open this folder in Unity ', h('span', { class: 'okc' }, r.unityVersion || '(matching version)'), ': ', h('span', { class: 'okc' }, r.projectDir)),
+        r.textures + r.scenes + r.prefabs + r.yamlAssets + r.text + r.audio > 0
+          ? h('p', {}, 'Open this folder in Unity ', h('span', { class: 'okc' }, r.unityVersion || '(matching version)'), ': ', h('span', { class: 'okc' }, r.projectDir))
+          : h('p', { class: 'note' }, `Nothing was exported to ${r.projectDir}: every category is switched off, or nothing in this game can be exported (see below).`),
         reasons.length ? h('div', { class: 'problems', tabindex: '0' }, h('div', { class: 'note' }, `${fmtNum(r.skippedCount)} object(s) not exported`),
           reasons.map(([why, n]) => h('div', {}, `${fmtNum(n)} × ${why}`))) : null,
         h('p', { class: 'dim' }, 'Details are in XeraRipper-Report.md inside the project folder.'));
@@ -1055,7 +1148,6 @@ const TITLES = { home: 'Home', assets: 'Assets', collections: 'Collections', bun
 
 function route() {
   state.route = parseHash();
-  closeMenus();
   const r = state.route;
   // views that need loaded files fall back to Home (which shows the "open something" screen)
   if (!state.summary && !['home', 'credits'].includes(r.name)) { history.replaceState(null, '', '#/home'); state.route = parseHash(); }
@@ -1103,8 +1195,10 @@ $('#copyright').textContent = `© ${new Date().getFullYear()} Xera Games LLC. Al
     state.info = await apiJson('/api/state');
     state.summary = state.info.summary;
     $('#copyright').textContent = `© ${new Date().getFullYear()} Xera Games LLC. All rights reserved. · Xera Ripper v${state.info.version}`;
+    $('#logo').href = `${location.href.split('#')[0]}#/home`; // keeps ?t=<token>, so "open in new tab" works
     if (!location.hash) history.replaceState(null, '', state.summary ? '#/assets' : '#/home'); // launched with a path: start in the asset list
     route();
+    if (state.info.notice) toast(state.info.notice, 'error'); // e.g. the folder dropped on the .exe could not be opened, and why
   } catch (e) {
     document.body.replaceChildren(h('main', {}, h('section', { class: 'welcome' }, h('h1', {}, 'Xera Ripper'), h('p', { class: 'err' }, `Could not reach the Xera Ripper server: ${e.message}`))));
   }

@@ -62,6 +62,15 @@ Every view has its own address (`#/assets?type=Texture2D&sel=12&tab=hex`), so **
 | **Scenes** | Files that hold GameObjects; open one for its **hierarchy** (expand/collapse, find by name, components as links to the component's asset) |
 | **Credits** | Under Help |
 
+**Keyboard:** the menu bar follows the usual pattern (arrow keys open and move through menus, Esc closes and gives focus back), dialogs keep Tab
+inside them, and the asset tabs use Left/Right/Home/End.
+
+**Opening things safely:** a file or folder that cannot be opened (not Unity data, corrupt archive, nothing readable) is reported with the reason
+and leaves whatever you already had loaded exactly as it was. A folder that contains a subfolder you are not allowed to read still opens; the
+unreadable part is listed under *Development → Skipped files*. Big `.resS` / `.resource` files are read by range (only the bytes a texture or sound
+needs), not loaded whole once per asset. Asset names in any language are kept in exported file names (Windows device names such as `CON` are
+prefixed with `_`).
+
 **Export → Export Unity project…** has an **export settings** list (textures, text, audio, scenes, prefabs, materials/meshes/other assets); your
 choices are remembered. On **Windows** the file dialog has a **This PC** button for switching drives, and a path pasted with quotes
 (`"C:\Games\MyGame"`, as Explorer's *Copy as path* gives it) is accepted everywhere a path can be typed.
@@ -105,8 +114,8 @@ materials point at exported textures, scenes at materials, and so on. A referenc
 
 | Area | Status |
 |---|---|
-| Inputs | UnityFS bundles (format 6-8; stored, LZ4, LZ4HC, **LZMA**), serialized files (versions 9-40 headers), folders, `.apk`/`.zip` (read in place) |
-| Stripped release builds | Retail player files (`level*`, `sharedassets*.assets`) have no type trees; Xera Ripper decodes them with a **built-in per-Unity-version type-tree database** (Unity 3.x to 6000, ~415 classes). Decoded bytes are checked against the object size, so a wrong layout is refused rather than mis-decoded |
+| Inputs | UnityFS bundles (format 6-8; stored, LZ4, LZ4HC, **LZMA**), serialized files (format versions 10 and 12-40; the very old formats 9 and 11 from Unity 3.5/4.x keep their type trees in an older layout that is **not implemented yet**, those files are listed as skipped with that reason), folders, `.apk`/`.zip` (read in place; backslash-separated entry names written by some Windows zip tools are accepted) |
+| Stripped release builds | Retail player files (`level*`, `sharedassets*.assets`) have no type trees; Xera Ripper decodes them with a **built-in per-Unity-version type-tree database** (Unity 3.4 to 6000, ~415 classes; this applies to formats 12+ only). Decoded bytes are checked against the object size, so a wrong layout is refused rather than mis-decoded |
 | 64-bit path IDs | Exact (hashed bundle IDs such as `-6291524532174903347` are common in real AssetBundles) |
 | Streamed data | `.resS` / `.resource` resolved from the same bundle, folder or APK |
 | Texture2D → PNG | Alpha8, R8, R16, RGB24, RGBA32, ARGB32, BGRA32, RGB565, RGBA4444, ARGB4444, **DXT1, DXT5** (pixel-exact against a reference decoder) |
@@ -114,7 +123,7 @@ materials point at exported textures, scenes at materials, and so on. A referenc
 
 ## Verification status (honest)
 
-`npm test`: **142 tests**. On top of that, `tools/crosscheck/` compares against **independent implementations**
+`npm test`: **159 tests**. On top of that, `tools/crosscheck/` compares against **independent implementations**
 (UnityPy, `texture2ddecoder`, Pillow, liblz4, PyYAML) — see its README for how to re-run them:
 
 - 27 generated files (serialized v17-22, little/big endian, hashed IDs, 8 bundle layouts, 154 real-layout objects across Unity 2017-6000)
@@ -124,6 +133,9 @@ materials point at exported textures, scenes at materials, and so on. A referenc
 - The web UI (every tab, view, menu item and the Windows-style file dialog) is exercised with a **real mouse in Chromium at 11 window widths**
   (`tools/crosscheck/ui_views.mjs`, `ui_menus.mjs`), failing on console errors, unreachable controls and horizontal page scroll. This is Chromium on Linux:
   the Windows file dialog is tested against simulated Windows answers, and the `.exe` itself is smoke-tested on a real Windows runner in CI.
+- Bugs found by independent reviews (a failed Open wiping the loaded game, double-click in the file dialog, keyboard focus, stacking toasts, a
+  quadratic regex, name collisions, per-asset re-reads of `.resS` files, ...) each have a regression test that fails on the old code
+  (`test/robustness.test.js`, `tools/crosscheck/ui_regress.mjs`).
 - 1,437 generated Unity YAML documents (every class with an editor layout × 5 Unity versions, with deliberately awkward strings) parse with
   a real YAML parser and match the values they were generated from.
 
@@ -145,6 +157,7 @@ exports are confined to the chosen folder and file names are sanitised.
 npm test                                   # unit tests (no browser needed)
 node tools/crosscheck/ui_views.mjs  "$(npm root -g)"   # every tab and view with a real mouse at 11 window widths (needs Playwright + Chromium)
 node tools/crosscheck/ui_menus.mjs  "$(npm root -g)"   # every menu item, same idea
+node tools/crosscheck/ui_regress.mjs "$(npm root -g)"   # regressions found by review: failed load, double-click, keyboard, focus trap, paging, downloads, narrow screens
 node tools/build-exe.mjs                   # single-file build for this OS  (npm install first: esbuild + postject are build-time only)
 node tools/build-exe.mjs --target win32    # xera-ripper.exe from any OS
 node tools/smoke-exe.mjs dist/xera-ripper.exe   # runs the real executable end to end

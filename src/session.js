@@ -10,14 +10,25 @@ import { exportUnityProject } from './unityProject.js';
 
 const PLATFORMS = { 2: 'macOS', 5: 'Windows', 9: 'iOS', 13: 'Android', 19: 'Windows64', 24: 'Linux64' };
 const SKIP_EXT = /\.(so|dex|png|jpe?g|xml|json|txt|ogg|mp3|wav|mp4|ttf|otf|ress|resource|arsc|rsa|sf|mf|dll|pdb|dat|md|html?|js|css|cs|kotlin_module|properties|version|apk|obb)$/i;
-const MAX_FILE = 3 * 1024 ** 3;
+const MAX_FILE = 2 ** 31 - 1; // one Buffer / readFileSync call cannot hold more than 2 GiB
 
 const baseOf = (n) => n.slice(n.lastIndexOf('/') + 1);
 
 function isCandidate(entry) {
   if (/^(META-INF|res|lib)\//i.test(entry.name)) return false;
   if (SKIP_EXT.test(entry.name)) return false;
-  return entry.size > 32 && entry.size <= MAX_FILE;
+  return entry.size > 32;
+}
+
+// Thrown when nothing Unity-shaped was found. The session keeps whatever was loaded before (a failed Open must not wipe the loaded game).
+export class NothingLoadedError extends Error {
+  constructor(path, skipped) {
+    const why = skipped.slice(0, 3).map((x) => `${x.name}: ${x.reason}`).join('; ');
+    super(`No Unity files were found in ${path}.${skipped.length
+      ? ` ${skipped.length} file(s) looked like Unity data but could not be opened (${why}${skipped.length > 3 ? '; …' : ''}).`
+      : ' Pick a UnityFS bundle, a serialized file (level0, *.assets), a game folder or an .apk.'}`);
+    this.skipped = skipped;
+  }
 }
 
 export { safeSegment };
@@ -50,26 +61,42 @@ export class Session {
 
   get loaded() { return this.files.length > 0; }
 
+  // All-or-nothing: if opening fails (bad path, corrupt archive, nothing Unity in there) the previously loaded files stay exactly as they were.
   load(inputPath) {
-    this.reset();
-    this.inputPath = resolve(inputPath);
-    this.source = openSource(inputPath);
-    this.log(`opening ${this.inputPath}`);
-    const t0 = Date.now();
-    for (const entry of this.source.list()) {
-      if (!isCandidate(entry)) continue;
-      if (this.source.head) {
-        let head;
-        try { head = this.source.head(entry.name, 64); } catch (e) { this._skip(entry.name, `read failed: ${e.message}`); continue; }
-        if (!isUnityFs(head) && !legacyBundleKind(head) && !looksLikeSerializedFile(head, entry.size)) continue;
+    const prev = { source: this.source, inputPath: this.inputPath, files: this.files, assets: this.assets, bundles: this.bundles, skipped: this.skipped, loadedAt: this.loadedAt };
+    this.source = null; this.inputPath = null; this.files = []; this.assets = []; this.bundles = []; this.skipped = []; this.loadedAt = null;
+    let ok = false;
+    try {
+      this.inputPath = resolve(inputPath);
+      this.source = openSource(inputPath);
+      this.log(`opening ${this.inputPath}`);
+      const t0 = Date.now();
+      const entries = this.source.list();
+      for (const p of this.source.problems ?? []) this._skip(p.name, p.reason);
+      for (const entry of entries) {
+        if (!isCandidate(entry)) continue;
+        if (this.source.head) {
+          let head;
+          try { head = this.source.head(entry.name, 64); } catch (e) { this._skip(entry.name, `read failed: ${e.message}`); continue; }
+          if (!isUnityFs(head) && !legacyBundleKind(head) && !looksLikeSerializedFile(head, entry.size)) continue;
+        }
+        if (entry.size > MAX_FILE) { this._skip(entry.name, 'larger than 2 GiB, which is not supported'); continue; }
+        let buf;
+        try { buf = this.source.read(entry.name); } catch (e) { this._skip(entry.name, `read failed: ${e.message}`); continue; }
+        try { this._ingest(entry.name, buf); } catch (e) { this._skip(entry.name, e.message); }
       }
-      let buf;
-      try { buf = this.source.read(entry.name); } catch (e) { this._skip(entry.name, `read failed: ${e.message}`); continue; }
-      try { this._ingest(entry.name, buf); } catch (e) { this._skip(entry.name, e.message); }
+      if (this.files.length === 0) throw new NothingLoadedError(this.inputPath, this.skipped);
+      this.loadedAt = Date.now();
+      this.log(`loaded ${this.files.length} serialized file(s), ${this.assets.length} object(s) in ${Date.now() - t0} ms`);
+      ok = true;
+      return this.summary();
+    } catch (e) {
+      this.log(`could not open ${inputPath}: ${e.message}`);
+      throw e;
+    } finally {
+      if (ok) prev.source?.close();
+      else { this.source?.close(); Object.assign(this, prev); }
     }
-    this.loadedAt = Date.now();
-    this.log(`loaded ${this.files.length} serialized file(s), ${this.assets.length} object(s) in ${Date.now() - t0} ms`);
-    return this.summary();
   }
 
   _skip(name, reason) {
